@@ -1,0 +1,21 @@
+{
+  "name": "chessground-examples",
+  "version": "1.0.0",
+  "description": "This README would normally document whatever steps are necessary to get your application up and running.",
+  "main": "Gulpfile.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git"
+  },
+  "author": "",
+  "license": "ISC",
+  "homepage": "",
+  "dependencies": {
+    "browserify": "^13.0.0",
+    "chessground": "^3.1.0",
+    "gulp": "^3.9.0",
+    "gulp-browserify": "^0.5.1"
+  }
+}

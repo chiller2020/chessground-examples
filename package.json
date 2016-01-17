@@ -10,7 +10,7 @@
     "type": "git"
   },
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "homepage": "",
   "dependencies": {
     "browserify": "^13.0.0",

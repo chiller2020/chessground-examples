@@ -1,29 +1,33 @@
-# README #
+## Synopsis
 
-This README would normally document whatever steps are necessary to get your application up and running.
+Simple examples that show some basic usage of chessground https://github.com/ornicar/chessground ,
+including usage of chess.js https://github.com/jhlywa/chess.js and garbochess https://github.com/glinscott/Garbochess-JS
 
-### What is this repository for? ###
+Example1: Initialize chessground instance. 
 
-* Quick summary
-* Version
-* [Learn Markdown](https://bitbucket.org/tutorials/markdowndemo)
+Example2: Initialize chessground instance by FEN string.
 
-### How do I get set up? ###
+Example3: chessground Math.random vs Math.random example.
 
-* Summary of set up
-* Configuration
-* Dependencies
-* Database configuration
-* How to run tests
-* Deployment instructions
+Example4: chessground garbochess vs garbochess example.
 
-### Contribution guidelines ###
+## Installation
 
-* Writing tests
-* Code review
-* Other guidelines
+npm install
 
-### Who do I talk to? ###
+## Build
 
-* Repo owner or admin
-* Other community or team contact
+gulp
+
+##Credits
+
+Credits go to
+
+chessground https://github.com/ornicar/chessground
+chess.js https://github.com/jhlywa/chess.js
+garbochess https://github.com/glinscott/Garbochess-JS
+http://chessboardjs.com/
+
+## License
+
+MIT

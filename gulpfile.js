@@ -26,7 +26,14 @@ gulp.task('default', function() {
 		.pipe(browserify({
 		  insertGlobals : false
 		}))
-		.pipe(gulp.dest('./example4/build'))
+		.pipe(gulp.dest('./example4/build'));
+
+		gulp.src('./example5/src/app.js')
+		.pipe(browserify({
+		  insertGlobals : false
+		}))
+		.pipe(gulp.dest('./example5/build'))
+
 
 }
 

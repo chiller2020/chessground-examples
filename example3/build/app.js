@@ -67,7 +67,1920 @@ var makeRandomMove = function() {
 
 
 window.setTimeout(makeRandomMove, 500);
-},{"../../assets/libs/chess.min.js":1,"chessground":15}],3:[function(require,module,exports){
+},{"../../assets/libs/chess.min.js":1,"chessground":13}],3:[function(require,module,exports){
+var util = require('./util');
+
+// https://gist.github.com/gre/1650294
+var easing = {
+  easeInOutCubic: function(t) {
+    return t < 0.5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1;
+  },
+};
+
+function makePiece(k, piece, invert) {
+  var key = invert ? util.invertKey(k) : k;
+  return {
+    key: key,
+    pos: util.key2pos(key),
+    role: piece.role,
+    color: piece.color
+  };
+}
+
+function samePiece(p1, p2) {
+  return p1.role === p2.role && p1.color === p2.color;
+}
+
+function closer(piece, pieces) {
+  return pieces.sort(function(p1, p2) {
+    return util.distance(piece.pos, p1.pos) - util.distance(piece.pos, p2.pos);
+  })[0];
+}
+
+function computePlan(prev, current) {
+  var bounds = current.bounds(),
+    width = bounds.width / 8,
+    height = bounds.height / 8,
+    anims = {},
+    animedOrigs = [],
+    fadings = [],
+    missings = [],
+    news = [],
+    invert = prev.orientation !== current.orientation,
+    prePieces = {},
+    white = current.orientation === 'white';
+  for (var pk in prev.pieces) {
+    var piece = makePiece(pk, prev.pieces[pk], invert);
+    prePieces[piece.key] = piece;
+  }
+  for (var i = 0; i < util.allKeys.length; i++) {
+    var key = util.allKeys[i];
+    if (key !== current.movable.dropped[1]) {
+      var curP = current.pieces[key];
+      var preP = prePieces[key];
+      if (curP) {
+        if (preP) {
+          if (!samePiece(curP, preP)) {
+            missings.push(preP);
+            news.push(makePiece(key, curP, false));
+          }
+        } else
+          news.push(makePiece(key, curP, false));
+      } else if (preP)
+        missings.push(preP);
+    }
+  }
+  news.forEach(function(newP) {
+    var preP = closer(newP, missings.filter(util.partial(samePiece, newP)));
+    if (preP) {
+      var orig = white ? preP.pos : newP.pos;
+      var dest = white ? newP.pos : preP.pos;
+      var vector = [(orig[0] - dest[0]) * width, (dest[1] - orig[1]) * height];
+      anims[newP.key] = [vector, vector];
+      animedOrigs.push(preP.key);
+    }
+  });
+  missings.forEach(function(p) {
+    if (p.key !== current.movable.dropped[0] && !util.containsX(animedOrigs, p.key)) {
+      fadings.push({
+        piece: {
+          role: p.role,
+          color: p.color
+        },
+        left: 12.5 * (white ? (p.pos[0] - 1) : (8 - p.pos[0])) + '%',
+        bottom: 12.5 * (white ? (p.pos[1] - 1) : (8 - p.pos[1])) + '%',
+        opacity: 1
+      });
+    }
+  });
+
+  return {
+    anims: anims,
+    fadings: fadings
+  };
+}
+
+function roundBy(n, by) {
+  return Math.round(n * by) / by;
+}
+
+function go(data) {
+  if (!data.animation.current.start) return; // animation was canceled
+  var rest = 1 - (new Date().getTime() - data.animation.current.start) / data.animation.current.duration;
+  if (rest <= 0) {
+    data.animation.current = {};
+    data.render();
+  } else {
+    var ease = easing.easeInOutCubic(rest);
+    for (var key in data.animation.current.anims) {
+      var cfg = data.animation.current.anims[key];
+      cfg[1] = [roundBy(cfg[0][0] * ease, 10), roundBy(cfg[0][1] * ease, 10)];
+    }
+    for (var i in data.animation.current.fadings) {
+      data.animation.current.fadings[i].opacity = roundBy(ease, 100);
+    }
+    data.render();
+    util.requestAnimationFrame(function() {
+      go(data);
+    });
+  }
+}
+
+function animate(transformation, data) {
+  // clone data
+  var prev = {
+    orientation: data.orientation,
+    pieces: {}
+  };
+  // clone pieces
+  for (var key in data.pieces) {
+    prev.pieces[key] = {
+      role: data.pieces[key].role,
+      color: data.pieces[key].color
+    };
+  }
+  var result = transformation();
+  var plan = computePlan(prev, data);
+  if (Object.keys(plan.anims).length > 0 || plan.fadings.length > 0) {
+    var alreadyRunning = data.animation.current.start;
+    data.animation.current = {
+      start: new Date().getTime(),
+      duration: data.animation.duration,
+      anims: plan.anims,
+      fadings: plan.fadings
+    };
+    if (!alreadyRunning) go(data);
+  } else {
+    // don't animate, just render right away
+    data.renderRAF();
+  }
+  return result;
+}
+
+// transformation is a function
+// accepts board data and any number of arguments,
+// and mutates the board.
+module.exports = function(transformation, data, skip) {
+  return function() {
+    var transformationArgs = [data].concat(Array.prototype.slice.call(arguments, 0));
+    if (!data.render) return transformation.apply(null, transformationArgs);
+    else if (data.animation.enabled && !skip)
+      return animate(util.partialApply(transformation, transformationArgs), data);
+    else {
+      var result = transformation.apply(null, transformationArgs);
+      data.renderRAF();
+      return result;
+    }
+  };
+};
+
+},{"./util":16}],4:[function(require,module,exports){
+var board = require('./board');
+
+module.exports = function(controller) {
+
+  return {
+    set: controller.set,
+    toggleOrientation: controller.toggleOrientation,
+    getOrientation: function () {
+      return controller.data.orientation;
+    },
+    getPieces: function() {
+      return controller.data.pieces;
+    },
+    getMaterialDiff: function() {
+      return board.getMaterialDiff(controller.data);
+    },
+    getFen: controller.getFen,
+    dump: function() {
+      return controller.data;
+    },
+    move: controller.apiMove,
+    newPiece: controller.apiNewPiece,
+    setPieces: controller.setPieces,
+    setCheck: controller.setCheck,
+    playPremove: controller.playPremove,
+    playPredrop: controller.playPredrop,
+    cancelPremove: controller.cancelPremove,
+    cancelPredrop: controller.cancelPredrop,
+    cancelMove: controller.cancelMove,
+    stop: controller.stop,
+    explode: controller.explode,
+    setAutoShapes: controller.setAutoShapes,
+    setShapes: controller.setShapes,
+    data: controller.data // directly exposes chessground state for more messing around
+  };
+};
+
+},{"./board":5}],5:[function(require,module,exports){
+var util = require('./util');
+var premove = require('./premove');
+var anim = require('./anim');
+var hold = require('./hold');
+
+function callUserFunction(f) {
+  setTimeout(f, 1);
+}
+
+function toggleOrientation(data) {
+  data.orientation = util.opposite(data.orientation);
+}
+
+function reset(data) {
+  data.lastMove = null;
+  setSelected(data, null);
+  unsetPremove(data);
+  unsetPredrop(data);
+}
+
+function setPieces(data, pieces) {
+  Object.keys(pieces).forEach(function(key) {
+    if (pieces[key]) data.pieces[key] = pieces[key];
+    else delete data.pieces[key];
+  });
+  data.movable.dropped = [];
+}
+
+function setCheck(data, color) {
+  var checkColor = color || data.turnColor;
+  Object.keys(data.pieces).forEach(function(key) {
+    if (data.pieces[key].color === checkColor && data.pieces[key].role === 'king') data.check = key;
+  });
+}
+
+function setPremove(data, orig, dest) {
+  unsetPredrop(data);
+  data.premovable.current = [orig, dest];
+  callUserFunction(util.partial(data.premovable.events.set, orig, dest));
+}
+
+function unsetPremove(data) {
+  if (data.premovable.current) {
+    data.premovable.current = null;
+    callUserFunction(data.premovable.events.unset);
+  }
+}
+
+function setPredrop(data, role, key) {
+  unsetPremove(data);
+  data.predroppable.current = {
+    role: role,
+    key: key
+  };
+  callUserFunction(util.partial(data.predroppable.events.set, role, key));
+}
+
+function unsetPredrop(data) {
+  if (data.predroppable.current.key) {
+    data.predroppable.current = {};
+    callUserFunction(data.predroppable.events.unset);
+  }
+}
+
+function tryAutoCastle(data, orig, dest) {
+  if (!data.autoCastle) return;
+  var king = data.pieces[dest];
+  if (king.role !== 'king') return;
+  var origPos = util.key2pos(orig);
+  if (origPos[0] !== 5) return;
+  if (origPos[1] !== 1 && origPos[1] !== 8) return;
+  var destPos = util.key2pos(dest),
+    oldRookPos, newRookPos, newKingPos;
+  if (destPos[0] === 7 || destPos[0] === 8) {
+    oldRookPos = util.pos2key([8, origPos[1]]);
+    newRookPos = util.pos2key([6, origPos[1]]);
+    newKingPos = util.pos2key([7, origPos[1]]);
+  } else if (destPos[0] === 3 || destPos[0] === 1) {
+    oldRookPos = util.pos2key([1, origPos[1]]);
+    newRookPos = util.pos2key([4, origPos[1]]);
+    newKingPos = util.pos2key([3, origPos[1]]);
+  } else return;
+  delete data.pieces[orig];
+  delete data.pieces[dest];
+  delete data.pieces[oldRookPos];
+  data.pieces[newKingPos] = {
+    role: 'king',
+    color: king.color
+  };
+  data.pieces[newRookPos] = {
+    role: 'rook',
+    color: king.color
+  };
+}
+
+function baseMove(data, orig, dest) {
+  var success = anim(function() {
+    if (orig === dest || !data.pieces[orig]) return false;
+    var captured = (
+      data.pieces[dest] &&
+      data.pieces[dest].color !== data.pieces[orig].color
+    ) ? data.pieces[dest] : null;
+    callUserFunction(util.partial(data.events.move, orig, dest, captured));
+    data.pieces[dest] = data.pieces[orig];
+    delete data.pieces[orig];
+    data.lastMove = [orig, dest];
+    data.check = null;
+    tryAutoCastle(data, orig, dest);
+    callUserFunction(data.events.change);
+    return true;
+  }, data)();
+  if (success) data.movable.dropped = [];
+  return success;
+}
+
+function baseNewPiece(data, piece, key) {
+  if (data.pieces[key]) return false;
+  callUserFunction(util.partial(data.events.dropNewPiece, piece, key));
+  data.pieces[key] = piece;
+  data.lastMove = [key, key];
+  data.check = null;
+  callUserFunction(data.events.change);
+  data.movable.dropped = [];
+  data.movable.dests = {};
+  data.turnColor = util.opposite(data.turnColor);
+  data.renderRAF();
+  return true;
+}
+
+function baseUserMove(data, orig, dest) {
+  var result = baseMove(data, orig, dest);
+  if (result) {
+    data.movable.dests = {};
+    data.turnColor = util.opposite(data.turnColor);
+  }
+  return result;
+}
+
+function apiMove(data, orig, dest) {
+  return baseMove(data, orig, dest);
+}
+
+function apiNewPiece(data, piece, key) {
+  return baseNewPiece(data, piece, key);
+}
+
+function userMove(data, orig, dest) {
+  if (!dest) {
+    hold.cancel();
+    setSelected(data, null);
+    if (data.movable.dropOff === 'trash') {
+      delete data.pieces[orig];
+      callUserFunction(data.events.change);
+    }
+  } else if (canMove(data, orig, dest)) {
+    if (baseUserMove(data, orig, dest)) {
+      var holdTime = hold.stop();
+      setSelected(data, null);
+      callUserFunction(util.partial(data.movable.events.after, orig, dest, {
+        premove: false,
+        holdTime: holdTime
+      }));
+      return true;
+    }
+  } else if (canPremove(data, orig, dest)) {
+    setPremove(data, orig, dest);
+    setSelected(data, null);
+  } else if (isMovable(data, dest) || isPremovable(data, dest)) {
+    setSelected(data, dest);
+    hold.start();
+  } else setSelected(data, null);
+}
+
+function dropNewPiece(data, orig, dest) {
+  if (canDrop(data, orig, dest)) {
+    var piece = data.pieces[orig];
+    delete data.pieces[orig];
+    baseNewPiece(data, piece, dest);
+    data.movable.dropped = [];
+    callUserFunction(util.partial(data.movable.events.afterNewPiece, piece.role, dest, {
+      predrop: false
+    }));
+  } else if (canPredrop(data, orig, dest)) {
+    setPredrop(data, data.pieces[orig].role, dest);
+  } else {
+    unsetPremove(data);
+    unsetPredrop(data);
+  }
+  delete data.pieces[orig];
+  setSelected(data, null);
+}
+
+function selectSquare(data, key) {
+  if (data.selected) {
+    if (key) {
+      if (data.selectable.enabled && data.selected !== key) {
+        if (userMove(data, data.selected, key)) data.stats.dragged = false;
+      } else hold.start();
+    } else {
+      setSelected(data, null);
+      hold.cancel();
+    }
+  } else if (isMovable(data, key) || isPremovable(data, key)) {
+    setSelected(data, key);
+    hold.start();
+  }
+  if (key) callUserFunction(util.partial(data.events.select, key));
+}
+
+function setSelected(data, key) {
+  data.selected = key;
+  if (key && isPremovable(data, key))
+    data.premovable.dests = premove(data.pieces, key, data.premovable.castle);
+  else
+    data.premovable.dests = null;
+}
+
+function isMovable(data, orig) {
+  var piece = data.pieces[orig];
+  return piece && (
+    data.movable.color === 'both' || (
+      data.movable.color === piece.color &&
+      data.turnColor === piece.color
+    ));
+}
+
+function canMove(data, orig, dest) {
+  return orig !== dest && isMovable(data, orig) && (
+    data.movable.free || util.containsX(data.movable.dests[orig], dest)
+  );
+}
+
+function canDrop(data, orig, dest) {
+  var piece = data.pieces[orig];
+  return piece && dest && (orig === dest || !data.pieces[dest]) && (
+    data.movable.color === 'both' || (
+      data.movable.color === piece.color &&
+      data.turnColor === piece.color
+    ));
+}
+
+
+function isPremovable(data, orig) {
+  var piece = data.pieces[orig];
+  return piece && data.premovable.enabled &&
+    data.movable.color === piece.color &&
+    data.turnColor !== piece.color;
+}
+
+function canPremove(data, orig, dest) {
+  return orig !== dest &&
+    isPremovable(data, orig) &&
+    util.containsX(premove(data.pieces, orig, data.premovable.castle), dest);
+}
+
+function canPredrop(data, orig, dest) {
+  var piece = data.pieces[orig];
+  return piece && dest &&
+    (!data.pieces[dest] || data.pieces[dest].color !== data.movable.color) &&
+    data.predroppable.enabled &&
+    (piece.role !== 'pawn' || (dest[1] !== '1' && dest[1] !== '8')) &&
+    data.movable.color === piece.color &&
+    data.turnColor !== piece.color;
+}
+
+function isDraggable(data, orig) {
+  var piece = data.pieces[orig];
+  return piece && data.draggable.enabled && (
+    data.movable.color === 'both' || (
+      data.movable.color === piece.color && (
+        data.turnColor === piece.color || data.premovable.enabled
+      )
+    )
+  );
+}
+
+function playPremove(data) {
+  var move = data.premovable.current;
+  if (!move) return;
+  var orig = move[0],
+    dest = move[1],
+    success = false;
+  if (canMove(data, orig, dest)) {
+    if (baseUserMove(data, orig, dest)) {
+      callUserFunction(util.partial(data.movable.events.after, orig, dest, {
+        premove: true
+      }));
+      success = true;
+    }
+  }
+  unsetPremove(data);
+  return success;
+}
+
+function playPredrop(data, validate) {
+  var drop = data.predroppable.current,
+    success = false;
+  if (!drop.key) return;
+  if (validate(drop)) {
+    var piece = {
+      role: drop.role,
+      color: data.movable.color
+    };
+    if (baseNewPiece(data, piece, drop.key)) {
+      callUserFunction(util.partial(data.movable.events.afterNewPiece, drop.role, drop.key, {
+        predrop: true
+      }));
+      success = true;
+    }
+  }
+  unsetPredrop(data);
+  return success;
+}
+
+function cancelMove(data) {
+  unsetPremove(data);
+  unsetPredrop(data);
+  selectSquare(data, null);
+}
+
+function stop(data) {
+  data.movable.color = null;
+  data.movable.dests = {};
+  cancelMove(data);
+}
+
+function getKeyAtDomPos(data, pos, bounds) {
+  if (!bounds && !data.bounds) return;
+  bounds = bounds || data.bounds(); // use provided value, or compute it
+  var file = Math.ceil(8 * ((pos[0] - bounds.left) / bounds.width));
+  file = data.orientation === 'white' ? file : 9 - file;
+  var rank = Math.ceil(8 - (8 * ((pos[1] - bounds.top) / bounds.height)));
+  rank = data.orientation === 'white' ? rank : 9 - rank;
+  if (file > 0 && file < 9 && rank > 0 && rank < 9) return util.pos2key([file, rank]);
+}
+
+// {white: {pawn: 3 queen: 1}, black: {bishop: 2}}
+function getMaterialDiff(data) {
+  var counts = {
+    king: 0,
+    queen: 0,
+    rook: 0,
+    bishop: 0,
+    knight: 0,
+    pawn: 0
+  };
+  for (var k in data.pieces) {
+    var p = data.pieces[k];
+    counts[p.role] += ((p.color === 'white') ? 1 : -1);
+  }
+  var diff = {
+    white: {},
+    black: {}
+  };
+  for (var role in counts) {
+    var c = counts[role];
+    if (c > 0) diff.white[role] = c;
+    else if (c < 0) diff.black[role] = -c;
+  }
+  return diff;
+}
+
+var pieceScores = {
+  pawn: 1,
+  knight: 3,
+  bishop: 3,
+  rook: 5,
+  queen: 9,
+  king: 0
+};
+
+function getScore(data) {
+  var score = 0;
+  for (var k in data.pieces) {
+    score += pieceScores[data.pieces[k].role] * (data.pieces[k].color === 'white' ? 1 : -1);
+  }
+  return score;
+}
+
+module.exports = {
+  reset: reset,
+  toggleOrientation: toggleOrientation,
+  setPieces: setPieces,
+  setCheck: setCheck,
+  selectSquare: selectSquare,
+  setSelected: setSelected,
+  isDraggable: isDraggable,
+  canMove: canMove,
+  userMove: userMove,
+  dropNewPiece: dropNewPiece,
+  apiMove: apiMove,
+  apiNewPiece: apiNewPiece,
+  playPremove: playPremove,
+  playPredrop: playPredrop,
+  unsetPremove: unsetPremove,
+  unsetPredrop: unsetPredrop,
+  cancelMove: cancelMove,
+  stop: stop,
+  getKeyAtDomPos: getKeyAtDomPos,
+  getMaterialDiff: getMaterialDiff,
+  getScore: getScore
+};
+
+},{"./anim":3,"./hold":12,"./premove":14,"./util":16}],6:[function(require,module,exports){
+var merge = require('merge');
+var board = require('./board');
+var fen = require('./fen');
+
+module.exports = function(data, config) {
+
+  if (!config) return;
+
+  // don't merge destinations. Just override.
+  if (config.movable && config.movable.dests) delete data.movable.dests;
+
+  merge.recursive(data, config);
+
+  // if a fen was provided, replace the pieces
+  if (data.fen) {
+    data.pieces = fen.read(data.fen);
+    data.check = config.check;
+    data.drawable.shapes = [];
+    delete data.fen;
+  }
+
+  if (data.check === true) board.setCheck(data);
+
+  // forget about the last dropped piece
+  data.movable.dropped = [];
+
+  // fix move/premove dests
+  if (data.selected) board.setSelected(data, data.selected);
+
+  // no need for such short animations
+  if (!data.animation.duration || data.animation.duration < 10)
+    data.animation.enabled = false;
+};
+
+},{"./board":5,"./fen":11,"merge":18}],7:[function(require,module,exports){
+var board = require('./board');
+var data = require('./data');
+var fen = require('./fen');
+var configure = require('./configure');
+var anim = require('./anim');
+var drag = require('./drag');
+
+module.exports = function(cfg) {
+
+  this.data = data(cfg);
+
+  this.vm = {
+    exploding: false
+  };
+
+  this.getFen = function() {
+    return fen.write(this.data.pieces);
+  }.bind(this);
+
+  this.set = anim(configure, this.data);
+
+  this.toggleOrientation = anim(board.toggleOrientation, this.data);
+
+  this.setPieces = anim(board.setPieces, this.data);
+
+  this.selectSquare = anim(board.selectSquare, this.data, true);
+
+  this.apiMove = anim(board.apiMove, this.data);
+
+  this.apiNewPiece = anim(board.apiNewPiece, this.data);
+
+  this.playPremove = anim(board.playPremove, this.data);
+
+  this.playPredrop = anim(board.playPredrop, this.data);
+
+  this.cancelPremove = anim(board.unsetPremove, this.data, true);
+
+  this.cancelPredrop = anim(board.unsetPredrop, this.data, true);
+
+  this.setCheck = anim(board.setCheck, this.data, true);
+
+  this.cancelMove = anim(function(data) {
+    board.cancelMove(data);
+    drag.cancel(data);
+  }.bind(this), this.data, true);
+
+  this.stop = anim(function(data) {
+    board.stop(data);
+    drag.cancel(data);
+  }.bind(this), this.data, true);
+
+  this.explode = function(keys) {
+    if (!this.data.render) return;
+    this.vm.exploding = {
+      stage: 1,
+      keys: keys
+    };
+    this.data.renderRAF();
+    setTimeout(function() {
+      this.vm.exploding.stage = 2;
+      this.data.renderRAF();
+      setTimeout(function() {
+        this.vm.exploding = false;
+        this.data.renderRAF();
+      }.bind(this), 120);
+    }.bind(this), 120);
+  }.bind(this);
+
+  this.setAutoShapes = function(shapes) {
+    anim(function(data) {
+      data.drawable.autoShapes = shapes;
+    }, this.data, false)();
+  }.bind(this);
+
+  this.setShapes = function(shapes) {
+    anim(function(data) {
+      data.drawable.shapes = shapes;
+    }, this.data, false)();
+  }.bind(this);
+};
+
+},{"./anim":3,"./board":5,"./configure":6,"./data":8,"./drag":9,"./fen":11}],8:[function(require,module,exports){
+var fen = require('./fen');
+var configure = require('./configure');
+
+module.exports = function(cfg) {
+  var defaults = {
+    pieces: fen.read(fen.initial),
+    orientation: 'white', // board orientation. white | black
+    turnColor: 'white', // turn to play. white | black
+    check: null, // square currently in check "a2" | null
+    lastMove: null, // squares part of the last move ["c3", "c4"] | null
+    selected: null, // square currently selected "a1" | null
+    coordinates: true, // include coords attributes
+    render: null, // function that rerenders the board
+    renderRAF: null, // function that rerenders the board using requestAnimationFrame
+    element: null, // DOM element of the board, required for drag piece centering
+    bounds: null, // function that calculates the board bounds
+    autoCastle: false, // immediately complete the castle by moving the rook after king move
+    viewOnly: false, // don't bind events: the user will never be able to move pieces around
+    minimalDom: false, // don't use square elements. Optimization to use only with viewOnly
+    disableContextMenu: false, // because who needs a context menu on a chessboard
+    resizable: true, // listens to chessground.resize on document.body to clear bounds cache
+    highlight: {
+      lastMove: true, // add last-move class to squares
+      check: true, // add check class to squares
+      dragOver: true // add drag-over class to square when dragging over it
+    },
+    animation: {
+      enabled: true,
+      duration: 200,
+      /*{ // current
+       *  start: timestamp,
+       *  duration: ms,
+       *  anims: {
+       *    a2: [
+       *      [-30, 50], // animation goal
+       *      [-20, 37]  // animation current status
+       *    ], ...
+       *  },
+       *  fading: [
+       *    {
+       *      pos: [80, 120], // position relative to the board
+       *      opacity: 0.34,
+       *      role: 'rook',
+       *      color: 'black'
+       *    }
+       *  }
+       *}*/
+      current: {}
+    },
+    movable: {
+      free: true, // all moves are valid - board editor
+      color: 'both', // color that can move. white | black | both | null
+      dests: {}, // valid moves. {"a2" ["a3" "a4"] "b1" ["a3" "c3"]} | null
+      dropOff: 'revert', // when a piece is dropped outside the board. "revert" | "trash"
+      dropped: [], // last dropped [orig, dest], not to be animated
+      showDests: true, // whether to add the move-dest class on squares
+      events: {
+        after: function(orig, dest, metadata) {}, // called after the move has been played
+        afterNewPiece: function(role, pos) {} // called after a new piece is dropped on the board
+      }
+    },
+    premovable: {
+      enabled: true, // allow premoves for color that can not move
+      showDests: true, // whether to add the premove-dest class on squares
+      castle: true, // whether to allow king castle premoves
+      dests: [], // premove destinations for the current selection
+      current: null, // keys of the current saved premove ["e2" "e4"] | null
+      events: {
+        set: function(orig, dest) {}, // called after the premove has been set
+        unset: function() {} // called after the premove has been unset
+      }
+    },
+    predroppable: {
+      enabled: false, // allow predrops for color that can not move
+      current: {}, // current saved predrop {role: 'knight', key: 'e4'} | {}
+      events: {
+        set: function(role, key) {}, // called after the predrop has been set
+        unset: function() {} // called after the predrop has been unset
+      }
+    },
+    draggable: {
+      enabled: true, // allow moves & premoves to use drag'n drop
+      distance: 3, // minimum distance to initiate a drag, in pixels
+      autoDistance: true, // lets chessground set distance to zero when user drags pieces
+      centerPiece: true, // center the piece on cursor at drag start
+      showGhost: true, // show ghost of piece being dragged
+      /*{ // current
+       *  orig: "a2", // orig key of dragging piece
+       *  rel: [100, 170] // x, y of the piece at original position
+       *  pos: [20, -12] // relative current position
+       *  dec: [4, -8] // piece center decay
+       *  over: "b3" // square being moused over
+       *  bounds: current cached board bounds
+       *  started: whether the drag has started, as per the distance setting
+       *}*/
+      current: {}
+    },
+    selectable: {
+      // disable to enforce dragging over click-click move
+      enabled: true
+    },
+    stats: {
+      // was last piece dragged or clicked?
+      // needs default to false for touch
+      dragged: !('ontouchstart' in window)
+    },
+    events: {
+      change: function() {}, // called after the situation changes on the board
+      // called after a piece has been moved.
+      // capturedPiece is null or like {color: 'white', 'role': 'queen'}
+      move: function(orig, dest, capturedPiece) {},
+      dropNewPiece: function(role, pos) {},
+      capture: function(key, piece) {}, // DEPRECATED called when a piece has been captured
+      select: function(key) {} // called when a square is selected
+    },
+    drawable: {
+      enabled: false, // allows SVG drawings
+      onChange: function(shapes) {},
+      // user shapes
+      shapes: [
+        // {brush: 'green', orig: 'e8'},
+        // {brush: 'yellow', orig: 'c4', dest: 'f7'}
+      ],
+      // computer shapes
+      autoShapes: [
+        // {brush: 'paleBlue', orig: 'e8'},
+        // {brush: 'paleRed', orig: 'c4', dest: 'f7'}
+      ],
+      /*{ // current
+       *  orig: "a2", // orig key of drawing
+       *  pos: [20, -12] // relative current position
+       *  dest: "b3" // square being moused over
+       *  bounds: // current cached board bounds
+       *  brush: 'green' // brush name for shape
+       *}*/
+      current: {},
+      brushes: {
+        green: {
+          key: 'g',
+          color: '#15781B',
+          opacity: 1,
+          lineWidth: 10,
+          circleMargin: 0
+        },
+        red: {
+          key: 'r',
+          color: '#882020',
+          opacity: 1,
+          lineWidth: 10,
+          circleMargin: 1
+        },
+        blue: {
+          key: 'b',
+          color: '#003088',
+          opacity: 1,
+          lineWidth: 10,
+          circleMargin: 2
+        },
+        yellow: {
+          key: 'y',
+          color: '#e68f00',
+          opacity: 1,
+          lineWidth: 10,
+          circleMargin: 3
+        },
+        paleBlue: {
+          key: 'pb',
+          color: '#003088',
+          opacity: 0.3,
+          lineWidth: 15,
+          circleMargin: 0
+        },
+        paleGreen: {
+          key: 'pg',
+          color: '#15781B',
+          opacity: 0.35,
+          lineWidth: 15,
+          circleMargin: 0
+        }
+      }
+    }
+  };
+
+  configure(defaults, cfg || {});
+
+  return defaults;
+};
+
+},{"./configure":6,"./fen":11}],9:[function(require,module,exports){
+var board = require('./board');
+var util = require('./util');
+var draw = require('./draw');
+
+var originTarget;
+
+function hashPiece(piece) {
+  return piece ? piece.color + piece.role : '';
+}
+
+function computeSquareBounds(data, bounds, key) {
+  var pos = util.key2pos(key);
+  if (data.orientation !== 'white') {
+    pos[0] = 9 - pos[0];
+    pos[1] = 9 - pos[1];
+  }
+  return {
+    left: bounds.left + bounds.width * (pos[0] - 1) / 8,
+    top: bounds.top + bounds.height * (8 - pos[1]) / 8,
+    width: bounds.width / 8,
+    height: bounds.height / 8
+  };
+}
+
+function start(data, e) {
+  if (e.button !== undefined && e.button !== 0) return; // only touch or left click
+  if (e.touches && e.touches.length > 1) return; // support one finger touch only
+  e.stopPropagation();
+  e.preventDefault();
+  originTarget = e.target;
+  var previouslySelected = data.selected;
+  var position = util.eventPosition(e);
+  var bounds = data.bounds();
+  var orig = board.getKeyAtDomPos(data, position, bounds);
+  var hadPremove = !!data.premovable.current;
+  var hadPredrop = !!data.predroppable.current.key;
+  board.selectSquare(data, orig);
+  var stillSelected = data.selected === orig;
+  if (!previouslySelected && !data.pieces[orig]) draw.clear(data);
+  if (data.pieces[orig] && stillSelected && board.isDraggable(data, orig)) {
+    var squareBounds = computeSquareBounds(data, bounds, orig);
+    data.draggable.current = {
+      previouslySelected: previouslySelected,
+      orig: orig,
+      piece: hashPiece(data.pieces[orig]),
+      rel: position,
+      epos: position,
+      pos: [0, 0],
+      dec: data.draggable.centerPiece ? [
+        position[0] - (squareBounds.left + squareBounds.width / 2),
+        position[1] - (squareBounds.top + squareBounds.height / 2)
+      ] : [0, 0],
+      bounds: bounds,
+      started: data.draggable.autoDistance && data.stats.dragged
+    };
+  } else {
+    if (hadPremove) board.unsetPremove(data);
+    if (hadPredrop) board.unsetPredrop(data);
+  }
+  processDrag(data);
+}
+
+function processDrag(data) {
+  util.requestAnimationFrame(function() {
+    var cur = data.draggable.current;
+    if (cur.orig) {
+      // cancel animations while dragging
+      if (data.animation.current.start && data.animation.current.anims[cur.orig])
+        data.animation.current = {};
+      // if moving piece is gone, cancel
+      if (hashPiece(data.pieces[cur.orig]) !== cur.piece) cancel(data);
+      else {
+        if (!cur.started && util.distance(cur.epos, cur.rel) >= data.draggable.distance)
+          cur.started = true;
+        if (cur.started) {
+          cur.pos = [
+            cur.epos[0] - cur.rel[0],
+            cur.epos[1] - cur.rel[1]
+          ];
+          cur.over = board.getKeyAtDomPos(data, cur.epos, cur.bounds);
+        }
+      }
+    }
+    data.render();
+    if (cur.orig) processDrag(data);
+  });
+}
+
+function move(data, e) {
+  if (e.touches && e.touches.length > 1) return; // support one finger touch only
+  if (data.draggable.current.orig)
+    data.draggable.current.epos = util.eventPosition(e);
+}
+
+function end(data, e) {
+  var draggable = data.draggable;
+  var orig = draggable.current ? draggable.current.orig : null;
+  if (!orig) return;
+  // comparing with the origin target is an easy way to test that the end event
+  // has the same touch origin
+  if (e && e.type === "touchend" && originTarget !== e.target && !draggable.current.newPiece) {
+    draggable.current = {};
+    return;
+  }
+  board.unsetPremove(data);
+  board.unsetPredrop(data);
+  var dest = draggable.current.over;
+  if (draggable.current.started) {
+    if (draggable.current.newPiece) board.dropNewPiece(data, orig, dest);
+    else {
+      if (orig !== dest) data.movable.dropped = [orig, dest];
+      if (board.userMove(data, orig, dest)) data.stats.dragged = true;
+    }
+  }
+  if (orig === draggable.current.previouslySelected && (orig === dest || !dest))
+    board.setSelected(data, null);
+  else if (!data.selectable.enabled) board.setSelected(data, null);
+  draggable.current = {};
+}
+
+function cancel(data) {
+  if (data.draggable.current.orig) {
+    data.draggable.current = {};
+    board.selectSquare(data, null);
+  }
+}
+
+module.exports = {
+  start: start,
+  move: move,
+  end: end,
+  cancel: cancel,
+  processDrag: processDrag // must be exposed for board editors
+};
+
+},{"./board":5,"./draw":10,"./util":16}],10:[function(require,module,exports){
+var board = require('./board');
+var util = require('./util');
+
+var brushes = ['green', 'red', 'blue', 'yellow'];
+
+function hashPiece(piece) {
+  return piece ? piece.color + ' ' + piece.role : '';
+}
+
+function start(data, e) {
+  if (e.touches && e.touches.length > 1) return; // support one finger touch only
+  e.stopPropagation();
+  e.preventDefault();
+  board.cancelMove(data);
+  var position = util.eventPosition(e);
+  var bounds = data.bounds();
+  var orig = board.getKeyAtDomPos(data, position, bounds);
+  data.drawable.current = {
+    orig: orig,
+    epos: position,
+    bounds: bounds,
+    brush: brushes[(e.shiftKey & util.isRightButton(e)) + (e.altKey ? 2 : 0)]
+  };
+  processDraw(data);
+}
+
+function processDraw(data) {
+  util.requestAnimationFrame(function() {
+    var cur = data.drawable.current;
+    if (cur.orig) {
+      var dest = board.getKeyAtDomPos(data, cur.epos, cur.bounds);
+      if (cur.orig === dest) cur.dest = undefined;
+      else cur.dest = dest;
+    }
+    data.render();
+    if (cur.orig) processDraw(data);
+  });
+}
+
+function move(data, e) {
+  if (data.drawable.current.orig)
+    data.drawable.current.epos = util.eventPosition(e);
+}
+
+function end(data, e) {
+  var drawable = data.drawable;
+  var orig = drawable.current.orig;
+  var dest = drawable.current.dest;
+  if (orig && dest) addLine(drawable, orig, dest);
+  else if (orig) addCircle(drawable, orig);
+  drawable.current = {};
+  data.render();
+}
+
+function cancel(data) {
+  if (data.drawable.current.orig) data.drawable.current = {};
+}
+
+function clear(data) {
+  if (data.drawable.shapes.length) {
+    data.drawable.shapes = [];
+    data.render();
+    onChange(data.drawable);
+  }
+}
+
+function not(f) {
+  return function(x) {
+    return !f(x);
+  };
+}
+
+function addCircle(drawable, key) {
+  var brush = drawable.current.brush;
+  var sameCircle = function(s) {
+    return s.brush === brush && s.orig === key && !s.dest;
+  };
+  var exists = drawable.shapes.filter(sameCircle).length > 0;
+  if (exists) drawable.shapes = drawable.shapes.filter(not(sameCircle));
+  else drawable.shapes.push({
+    brush: brush,
+    orig: key
+  });
+  onChange(drawable);
+}
+
+function addLine(drawable, orig, dest) {
+  var brush = drawable.current.brush;
+  var sameLine = function(s) {
+    return s.orig && s.dest && (
+      (s.orig === orig && s.dest === dest) ||
+      (s.dest === orig && s.orig === dest)
+    );
+  };
+  var exists = drawable.shapes.filter(sameLine).length > 0;
+  if (exists) drawable.shapes = drawable.shapes.filter(not(sameLine));
+  else drawable.shapes.push({
+    brush: brush,
+    orig: orig,
+    dest: dest
+  });
+  onChange(drawable);
+}
+
+function onChange(drawable) {
+  drawable.onChange(drawable.shapes);
+}
+
+module.exports = {
+  start: start,
+  move: move,
+  end: end,
+  cancel: cancel,
+  clear: clear,
+  processDraw: processDraw
+};
+
+},{"./board":5,"./util":16}],11:[function(require,module,exports){
+var util = require('./util');
+
+var initial = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
+
+var roles = {
+  p: "pawn",
+  r: "rook",
+  n: "knight",
+  b: "bishop",
+  q: "queen",
+  k: "king"
+};
+
+var letters = {
+  pawn: "p",
+  rook: "r",
+  knight: "n",
+  bishop: "b",
+  queen: "q",
+  king: "k"
+};
+
+function read(fen) {
+  if (fen === 'start') fen = initial;
+  var pieces = {};
+  fen.replace(/ .+$/, '').replace(/~/g, '').split('/').forEach(function(row, y) {
+    var x = 0;
+    row.split('').forEach(function(v) {
+      var nb = parseInt(v);
+      if (nb) x += nb;
+      else {
+        x++;
+        pieces[util.pos2key([x, 8 - y])] = {
+          role: roles[v.toLowerCase()],
+          color: v === v.toLowerCase() ? 'black' : 'white'
+        };
+      }
+    });
+  });
+
+  return pieces;
+}
+
+function write(pieces) {
+  return [8, 7, 6, 5, 4, 3, 2].reduce(
+    function(str, nb) {
+      return str.replace(new RegExp(Array(nb + 1).join('1'), 'g'), nb);
+    },
+    util.invRanks.map(function(y) {
+      return util.ranks.map(function(x) {
+        var piece = pieces[util.pos2key([x, y])];
+        if (piece) {
+          var letter = letters[piece.role];
+          return piece.color === 'white' ? letter.toUpperCase() : letter;
+        } else return '1';
+      }).join('');
+    }).join('/'));
+}
+
+module.exports = {
+  initial: initial,
+  read: read,
+  write: write
+};
+
+},{"./util":16}],12:[function(require,module,exports){
+var startAt;
+
+var start = function() {
+  startAt = new Date();
+};
+
+var cancel = function() {
+  startAt = null;
+};
+
+var stop = function() {
+  if (!startAt) return 0;
+  var time = new Date() - startAt;
+  startAt = null;
+  return time;
+};
+
+module.exports = {
+  start: start,
+  cancel: cancel,
+  stop: stop
+};
+
+},{}],13:[function(require,module,exports){
+var m = require('mithril');
+var ctrl = require('./ctrl');
+var view = require('./view');
+var api = require('./api');
+
+// for usage outside of mithril
+function init(element, config) {
+
+  var controller = new ctrl(config);
+
+  m.render(element, view(controller));
+
+  return api(controller);
+}
+
+module.exports = init;
+module.exports.controller = ctrl;
+module.exports.view = view;
+module.exports.fen = require('./fen');
+module.exports.util = require('./util');
+module.exports.configure = require('./configure');
+module.exports.anim = require('./anim');
+module.exports.board = require('./board');
+module.exports.drag = require('./drag');
+
+},{"./anim":3,"./api":4,"./board":5,"./configure":6,"./ctrl":7,"./drag":9,"./fen":11,"./util":16,"./view":17,"mithril":19}],14:[function(require,module,exports){
+var util = require('./util');
+
+function diff(a, b) {
+  return Math.abs(a - b);
+}
+
+function pawn(color, x1, y1, x2, y2) {
+  return diff(x1, x2) < 2 && (
+    color === 'white' ? (
+      // allow 2 squares from 1 and 8, for horde
+      y2 === y1 + 1 || (y1 <= 2 && y2 === (y1 + 2) && x1 === x2)
+    ) : (
+      y2 === y1 - 1 || (y1 >= 7 && y2 === (y1 - 2) && x1 === x2)
+    )
+  );
+}
+
+function knight(x1, y1, x2, y2) {
+  var xd = diff(x1, x2);
+  var yd = diff(y1, y2);
+  return (xd === 1 && yd === 2) || (xd === 2 && yd === 1);
+}
+
+function bishop(x1, y1, x2, y2) {
+  return diff(x1, x2) === diff(y1, y2);
+}
+
+function rook(x1, y1, x2, y2) {
+  return x1 === x2 || y1 === y2;
+}
+
+function queen(x1, y1, x2, y2) {
+  return bishop(x1, y1, x2, y2) || rook(x1, y1, x2, y2);
+}
+
+function king(color, rookFiles, canCastle, x1, y1, x2, y2) {
+  return (
+    diff(x1, x2) < 2 && diff(y1, y2) < 2
+  ) || (
+    canCastle && y1 === y2 && y1 === (color === 'white' ? 1 : 8) && (
+      (x1 === 5 && (x2 === 3 || x2 === 7)) || util.containsX(rookFiles, x2)
+    )
+  );
+}
+
+function rookFilesOf(pieces, color) {
+  return Object.keys(pieces).filter(function(key) {
+    var piece = pieces[key];
+    return piece && piece.color === color && piece.role === 'rook';
+  }).map(function(key) {
+    return util.key2pos(key)[0];
+  });
+}
+
+function compute(pieces, key, canCastle) {
+  var piece = pieces[key];
+  var pos = util.key2pos(key);
+  var mobility;
+  switch (piece.role) {
+    case 'pawn':
+      mobility = pawn.bind(null, piece.color);
+      break;
+    case 'knight':
+      mobility = knight;
+      break;
+    case 'bishop':
+      mobility = bishop;
+      break;
+    case 'rook':
+      mobility = rook;
+      break;
+    case 'queen':
+      mobility = queen;
+      break;
+    case 'king':
+      mobility = king.bind(null, piece.color, rookFilesOf(pieces, piece.color), canCastle);
+      break;
+  }
+  return util.allPos.filter(function(pos2) {
+    return (pos[0] !== pos2[0] || pos[1] !== pos2[1]) && mobility(pos[0], pos[1], pos2[0], pos2[1]);
+  }).map(util.pos2key);
+}
+
+module.exports = compute;
+
+},{"./util":16}],15:[function(require,module,exports){
+var m = require('mithril');
+var key2pos = require('./util').key2pos;
+var isTrident = require('./util').isTrident;
+
+function circleWidth(current, bounds) {
+  return (current ? 2 : 4) / 512 * bounds.width;
+}
+
+function lineWidth(brush, current, bounds) {
+  return (brush.lineWidth || 10) * (current ? 0.7 : 1) / 512 * bounds.width;
+}
+
+function opacity(brush, current) {
+  return (brush.opacity || 1) * (current ? 0.6 : 1);
+}
+
+function arrowMargin(current, bounds) {
+  return isTrident() ? 0 : ((current ? 10 : 20) / 512 * bounds.width);
+}
+
+function pos2px(pos, bounds) {
+  var squareSize = bounds.width / 8;
+  return [(pos[0] - 0.5) * squareSize, (8.5 - pos[1]) * squareSize];
+}
+
+function circle(brush, pos, current, bounds) {
+  var o = pos2px(pos, bounds);
+  var width = circleWidth(current, bounds);
+  var radius = bounds.width / 16;
+  return {
+    tag: 'circle',
+    attrs: {
+      key: current ? 'current' : pos + brush.key,
+      stroke: brush.color,
+      'stroke-width': width,
+      fill: 'none',
+      opacity: opacity(brush, current),
+      cx: o[0],
+      cy: o[1],
+      r: radius - width / 2 - brush.circleMargin * width * 1.5
+    }
+  };
+}
+
+function arrow(brush, orig, dest, current, bounds) {
+  var m = arrowMargin(current, bounds);
+  var a = pos2px(orig, bounds);
+  var b = pos2px(dest, bounds);
+  var dx = b[0] - a[0],
+    dy = b[1] - a[1],
+    angle = Math.atan2(dy, dx);
+  var xo = Math.cos(angle) * m,
+    yo = Math.sin(angle) * m;
+  return {
+    tag: 'line',
+    attrs: {
+      key: current ? 'current' : orig + dest + brush.key,
+      stroke: brush.color,
+      'stroke-width': lineWidth(brush, current, bounds),
+      'stroke-linecap': 'round',
+      'marker-end': isTrident() ? null : 'url(#arrowhead-' + brush.key + ')',
+      opacity: opacity(brush, current),
+      x1: a[0],
+      y1: a[1],
+      x2: b[0] - xo,
+      y2: b[1] - yo
+    }
+  };
+}
+
+function defs(brushes) {
+  return {
+    tag: 'defs',
+    children: [
+      brushes.map(function(brush) {
+        return {
+          key: brush.key,
+          tag: 'marker',
+          attrs: {
+            id: 'arrowhead-' + brush.key,
+            orient: 'auto',
+            markerWidth: 4,
+            markerHeight: 8,
+            refX: 2.05,
+            refY: 2.01
+          },
+          children: [{
+            tag: 'path',
+            attrs: {
+              d: 'M0,0 V4 L3,2 Z',
+              fill: brush.color
+            }
+          }]
+        }
+      })
+    ]
+  };
+}
+
+function orient(pos, color) {
+  return color === 'white' ? pos : [9 - pos[0], 9 - pos[1]];
+}
+
+function renderShape(orientation, current, brushes, bounds) {
+  return function(shape) {
+    if (shape.orig && shape.dest) return arrow(
+      brushes[shape.brush],
+      orient(key2pos(shape.orig), orientation),
+      orient(key2pos(shape.dest), orientation),
+      current, bounds);
+    else if (shape.orig) return circle(
+      brushes[shape.brush],
+      orient(key2pos(shape.orig), orientation),
+      current, bounds);
+  };
+}
+
+module.exports = function(ctrl) {
+  if (!ctrl.data.bounds) return;
+  var d = ctrl.data.drawable;
+  var allShapes = d.shapes.concat(d.autoShapes);
+  if (!allShapes.length && !d.current.orig) return;
+  var bounds = ctrl.data.bounds();
+  if (bounds.width !== bounds.height) return;
+  var usedBrushes = Object.keys(ctrl.data.drawable.brushes).filter(function(name) {
+    return (d.current && d.current.dest && d.current.brush === name) || allShapes.filter(function(s) {
+      return s.dest && s.brush === name;
+    }).length;
+  }).map(function(name) {
+    return ctrl.data.drawable.brushes[name];
+  });
+  return {
+    tag: 'svg',
+    children: [
+      defs(usedBrushes),
+      allShapes.map(renderShape(ctrl.data.orientation, false, ctrl.data.drawable.brushes, bounds)),
+      renderShape(ctrl.data.orientation, true, ctrl.data.drawable.brushes, bounds)(d.current)
+    ]
+  };
+}
+
+},{"./util":16,"mithril":19}],16:[function(require,module,exports){
+var files = "abcdefgh".split('');
+var ranks = [1, 2, 3, 4, 5, 6, 7, 8];
+var invRanks = [8, 7, 6, 5, 4, 3, 2, 1];
+
+function pos2key(pos) {
+  return files[pos[0] - 1] + pos[1];
+}
+
+function key2pos(pos) {
+  return [(files.indexOf(pos[0]) + 1), parseInt(pos[1])];
+}
+
+function invertKey(key) {
+  return files[7 - files.indexOf(key[0])] + (9 - parseInt(key[1]));
+}
+
+var allPos = (function() {
+  var ps = [];
+  invRanks.forEach(function(y) {
+    ranks.forEach(function(x) {
+      ps.push([x, y]);
+    });
+  });
+  return ps;
+})();
+var invPos = allPos.slice().reverse();
+var allKeys = allPos.map(pos2key);
+
+function classSet(classes) {
+  var arr = [];
+  for (var i in classes) {
+    if (classes[i]) arr.push(i);
+  }
+  return arr.join(' ');
+}
+
+function opposite(color) {
+  return color === 'white' ? 'black' : 'white';
+}
+
+function contains2(xs, x) {
+  return xs && (xs[0] === x || xs[1] === x);
+}
+
+function containsX(xs, x) {
+  return xs && xs.indexOf(x) !== -1;
+}
+
+function distance(pos1, pos2) {
+  return Math.sqrt(Math.pow(pos1[0] - pos2[0], 2) + Math.pow(pos1[1] - pos2[1], 2));
+}
+
+// this must be cached because of the access to document.body.style
+var cachedTransformProp;
+
+function computeTransformProp() {
+  return 'transform' in document.body.style ?
+    'transform' : 'webkitTransform' in document.body.style ?
+    'webkitTransform' : 'mozTransform' in document.body.style ?
+    'mozTransform' : 'oTransform' in document.body.style ?
+    'oTransform' : 'msTransform';
+}
+
+function transformProp() {
+  if (!cachedTransformProp) cachedTransformProp = computeTransformProp();
+  return cachedTransformProp;
+}
+
+var cachedIsTrident = null;
+
+function isTrident() {
+  if (cachedIsTrident === null)
+    cachedIsTrident = window.navigator.userAgent.indexOf('Trident/') > -1;
+  return cachedIsTrident;
+}
+
+function translate(pos) {
+  return 'translate(' + pos[0] + 'px,' + pos[1] + 'px)';
+}
+
+function eventPosition(e) {
+  return e.touches ? [e.targetTouches[0].clientX, e.targetTouches[0].clientY] : [e.clientX, e.clientY];
+}
+
+function partialApply(fn, args) {
+  return fn.bind.apply(fn, [null].concat(args));
+}
+
+function partial() {
+  return partialApply(arguments[0], Array.prototype.slice.call(arguments, 1));
+}
+
+function isRightButton(e) {
+  return e.buttons === 2 || e.button === 2;
+}
+
+function memo(f) {
+  var v, ret = function() {
+    if (v === undefined) v = f();
+    return v;
+  };
+  ret.clear = function() {
+    v = undefined;
+  }
+  return ret;
+}
+
+module.exports = {
+  files: files,
+  ranks: ranks,
+  invRanks: invRanks,
+  allPos: allPos,
+  invPos: invPos,
+  allKeys: allKeys,
+  pos2key: pos2key,
+  key2pos: key2pos,
+  invertKey: invertKey,
+  classSet: classSet,
+  opposite: opposite,
+  translate: translate,
+  contains2: contains2,
+  containsX: containsX,
+  distance: distance,
+  eventPosition: eventPosition,
+  partialApply: partialApply,
+  partial: partial,
+  transformProp: transformProp,
+  isTrident: isTrident,
+  requestAnimationFrame: (window.requestAnimationFrame || window.setTimeout).bind(window),
+  isRightButton: isRightButton,
+  memo: memo
+};
+
+},{}],17:[function(require,module,exports){
+var drag = require('./drag');
+var draw = require('./draw');
+var util = require('./util');
+var svg = require('./svg');
+var m = require('mithril');
+
+function pieceClass(p) {
+  return p.role + ' ' + p.color;
+}
+
+function renderPiece(ctrl, key, p) {
+  var attrs = {
+    style: {},
+    class: pieceClass(p)
+  };
+  var draggable = ctrl.data.draggable.current;
+  if (draggable.orig === key && draggable.started) {
+    attrs.style[util.transformProp()] = util.translate([
+      draggable.pos[0] + draggable.dec[0],
+      draggable.pos[1] + draggable.dec[1]
+    ]);
+    attrs.class += ' dragging';
+  } else if (ctrl.data.animation.current.anims) {
+    var animation = ctrl.data.animation.current.anims[key];
+    if (animation) attrs.style[util.transformProp()] = util.translate(animation[1]);
+  }
+  return {
+    tag: 'piece',
+    attrs: attrs
+  };
+}
+
+function renderGhost(p) {
+  return {
+    tag: 'piece',
+    attrs: {
+      class: pieceClass(p) + ' ghost'
+    }
+  };
+}
+
+function renderSquare(ctrl, pos, asWhite) {
+  var d = ctrl.data;
+  var file = util.files[pos[0] - 1];
+  var rank = pos[1];
+  var key = file + rank;
+  var piece = d.pieces[key];
+  var isDragOver = d.highlight.dragOver && d.draggable.current.over === key;
+  var classes = util.classSet({
+    'selected': d.selected === key,
+    'check': d.highlight.check && d.check === key,
+    'last-move': d.highlight.lastMove && util.contains2(d.lastMove, key),
+    'move-dest': (isDragOver || d.movable.showDests) && util.containsX(d.movable.dests[d.selected], key),
+    'premove-dest': (isDragOver || d.premovable.showDests) && util.containsX(d.premovable.dests, key),
+    'current-premove': key === d.predroppable.current.key || util.contains2(d.premovable.current, key),
+    'drag-over': isDragOver,
+    'oc': !!piece,
+  });
+  if (ctrl.vm.exploding && ctrl.vm.exploding.keys.indexOf(key) !== -1) {
+    classes += ' exploding' + ctrl.vm.exploding.stage;
+  }
+  var attrs = {
+    style: {
+      left: (asWhite ? pos[0] - 1 : 8 - pos[0]) * 12.5 + '%',
+      bottom: (asWhite ? pos[1] - 1 : 8 - pos[1]) * 12.5 + '%'
+    }
+  };
+  if (classes) attrs.class = classes;
+  if (d.coordinates) {
+    if (pos[1] === (asWhite ? 1 : 8)) attrs['data-coord-x'] = file;
+    if (pos[0] === (asWhite ? 8 : 1)) attrs['data-coord-y'] = rank;
+  }
+  var children = [];
+  if (piece) {
+    children.push(renderPiece(ctrl, key, piece));
+    if (d.draggable.current.orig === key && d.draggable.showGhost && !d.draggable.current.newPiece) {
+      children.push(renderGhost(piece));
+    }
+  }
+  return {
+    tag: 'square',
+    attrs: attrs,
+    children: children
+  };
+}
+
+function renderFading(cfg) {
+  return {
+    tag: 'square',
+    attrs: {
+      class: 'fading',
+      style: {
+        left: cfg.left,
+        bottom: cfg.bottom,
+        opacity: cfg.opacity
+      }
+    },
+    children: [{
+      tag: 'piece',
+      attrs: {
+        class: pieceClass(cfg.piece)
+      }
+    }]
+  };
+}
+
+function renderMinimalDom(ctrl, asWhite) {
+  var children = [];
+  if (ctrl.data.lastMove) ctrl.data.lastMove.forEach(function(key) {
+    var pos = util.key2pos(key);
+    children.push({
+      tag: 'square',
+      attrs: {
+        class: 'last-move',
+        style: {
+          left: (asWhite ? pos[0] - 1 : 8 - pos[0]) * 12.5 + '%',
+          bottom: (asWhite ? pos[1] - 1 : 8 - pos[1]) * 12.5 + '%'
+        }
+      }
+    });
+  });
+  var piecesKeys = Object.keys(ctrl.data.pieces);
+  for (var i = 0, len = piecesKeys.length; i < len; i++) {
+    var key = piecesKeys[i];
+    var pos = util.key2pos(key);
+    var attrs = {
+      style: {
+        left: (asWhite ? pos[0] - 1 : 8 - pos[0]) * 12.5 + '%',
+        bottom: (asWhite ? pos[1] - 1 : 8 - pos[1]) * 12.5 + '%'
+      },
+      class: pieceClass(ctrl.data.pieces[key])
+    };
+    if (ctrl.data.animation.current.anims) {
+      var animation = ctrl.data.animation.current.anims[key];
+      if (animation) attrs.style[util.transformProp()] = util.translate(animation[1]);
+    }
+    children.push({
+      tag: 'piece',
+      attrs: attrs
+    });
+  }
+
+  return children;
+}
+
+function renderContent(ctrl) {
+  var asWhite = ctrl.data.orientation === 'white';
+  if (ctrl.data.minimalDom) return renderMinimalDom(ctrl, asWhite);
+  var positions = asWhite ? util.allPos : util.invPos;
+  var children = [];
+  for (var i = 0, len = positions.length; i < len; i++) {
+    children.push(renderSquare(ctrl, positions[i], asWhite));
+  }
+  if (ctrl.data.animation.current.fadings)
+    ctrl.data.animation.current.fadings.forEach(function(p) {
+      children.push(renderFading(p));
+    });
+  if (ctrl.data.drawable.enabled) children.push(svg(ctrl));
+  return children;
+}
+
+function dragOrDraw(d, withDrag, withDraw) {
+  return function(e) {
+    if (util.isRightButton(e) && d.draggable.current.orig) {
+      if (d.draggable.current.newPiece) delete d.pieces[d.draggable.current.orig];
+      d.draggable.current = {}
+      d.selected = null;
+    } else if (d.drawable.enabled && (e.shiftKey || util.isRightButton(e))) withDraw(d, e);
+    else if (!d.viewOnly) withDrag(d, e);
+  };
+}
+
+function bindEvents(ctrl, el, context) {
+  var d = ctrl.data;
+  var onstart = dragOrDraw(d, drag.start, draw.start);
+  var onmove = dragOrDraw(d, drag.move, draw.move);
+  var onend = dragOrDraw(d, drag.end, draw.end);
+  var startEvents = ['touchstart', 'mousedown'];
+  var moveEvents = ['touchmove', 'mousemove'];
+  var endEvents = ['touchend', 'mouseup'];
+  startEvents.forEach(function(ev) {
+    el.addEventListener(ev, onstart);
+  });
+  moveEvents.forEach(function(ev) {
+    document.addEventListener(ev, onmove);
+  });
+  endEvents.forEach(function(ev) {
+    document.addEventListener(ev, onend);
+  });
+  context.onunload = function() {
+    startEvents.forEach(function(ev) {
+      el.removeEventListener(ev, onstart);
+    });
+    moveEvents.forEach(function(ev) {
+      document.removeEventListener(ev, onmove);
+    });
+    endEvents.forEach(function(ev) {
+      document.removeEventListener(ev, onend);
+    });
+  };
+}
+
+function renderBoard(ctrl) {
+  return {
+    tag: 'div',
+    attrs: {
+      class: 'cg-board orientation-' + ctrl.data.orientation,
+      config: function(el, isUpdate, context) {
+        if (isUpdate) return;
+        if (!ctrl.data.viewOnly || ctrl.data.drawable.enabled)
+          bindEvents(ctrl, el, context);
+        // this function only repaints the board itself.
+        // it's called when dragging or animating pieces,
+        // to prevent the full application embedding chessground
+        // rendering on every animation frame
+        ctrl.data.render = function() {
+          m.render(el, renderContent(ctrl));
+        };
+        ctrl.data.renderRAF = function() {
+          util.requestAnimationFrame(ctrl.data.render);
+        };
+        ctrl.data.bounds = util.memo(el.getBoundingClientRect.bind(el));
+        ctrl.data.element = el;
+        ctrl.data.render();
+      }
+    },
+    children: []
+  };
+}
+
+module.exports = function(ctrl) {
+  return {
+    tag: 'div',
+    attrs: {
+      config: function(el, isUpdate) {
+        if (isUpdate) return;
+        el.addEventListener('contextmenu', function(e) {
+          if (ctrl.data.disableContextMenu || ctrl.data.drawable.enabled) {
+            e.preventDefault();
+            return false;
+          }
+        });
+        if (ctrl.data.resizable)
+          document.body.addEventListener('chessground.resize', function(e) {
+            ctrl.data.bounds.clear();
+            ctrl.data.render();
+          }, false);
+        ['onscroll', 'onresize'].forEach(function(n) {
+          var prev = window[n];
+          window[n] = function() {
+            prev && prev();
+            ctrl.data.bounds.clear();
+          };
+        });
+      },
+      class: [
+        'cg-board-wrap',
+        ctrl.data.viewOnly ? 'view-only' : 'manipulable',
+        ctrl.data.minimalDom ? 'minimal-dom' : 'full-dom'
+      ].join(' ')
+    },
+    children: [renderBoard(ctrl)]
+  };
+};
+
+},{"./drag":9,"./draw":10,"./svg":15,"./util":16,"mithril":19}],18:[function(require,module,exports){
 /*!
  * @name JavaScript/NodeJS Merge v1.2.0
  * @author yeikos
@@ -243,7 +2156,7 @@ window.setTimeout(makeRandomMove, 500);
 	}
 
 })(typeof module === 'object' && module && typeof module.exports === 'object' && module.exports);
-},{}],4:[function(require,module,exports){
+},{}],19:[function(require,module,exports){
 var m = (function app(window, undefined) {
 	"use strict";
   	var VERSION = "v0.2.1";
@@ -1649,1752 +3562,4 @@ var m = (function app(window, undefined) {
 if (typeof module === "object" && module != null && module.exports) module.exports = m;
 else if (typeof define === "function" && define.amd) define(function() { return m });
 
-},{}],5:[function(require,module,exports){
-var util = require('./util');
-
-// https://gist.github.com/gre/1650294
-var easing = {
-  easeInOutCubic: function(t) {
-    return t < 0.5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1;
-  },
-};
-
-function makePiece(k, piece, invert) {
-  var key = invert ? util.invertKey(k) : k;
-  return {
-    key: key,
-    pos: util.key2pos(key),
-    role: piece.role,
-    color: piece.color
-  };
-}
-
-function samePiece(p1, p2) {
-  return p1.role === p2.role && p1.color === p2.color;
-}
-
-function closer(piece, pieces) {
-  return pieces.sort(function(p1, p2) {
-    return util.distance(piece.pos, p1.pos) - util.distance(piece.pos, p2.pos);
-  })[0];
-}
-
-function computePlan(prev, current) {
-  var bounds = current.bounds(),
-    width = bounds.width / 8,
-    height = bounds.height / 8,
-    anims = {},
-    animedOrigs = [],
-    fadings = [],
-    missings = [],
-    news = [],
-    invert = prev.orientation !== current.orientation,
-    prePieces = {},
-    white = current.orientation === 'white';
-  for (var pk in prev.pieces) {
-    var piece = makePiece(pk, prev.pieces[pk], invert);
-    prePieces[piece.key] = piece;
-  }
-  for (var i = 0; i < util.allKeys.length; i++) {
-    var key = util.allKeys[i];
-    if (key !== current.movable.dropped[1]) {
-      var curP = current.pieces[key];
-      var preP = prePieces[key];
-      if (curP) {
-        if (preP) {
-          if (!samePiece(curP, preP)) {
-            missings.push(preP);
-            news.push(makePiece(key, curP, false));
-          }
-        } else
-          news.push(makePiece(key, curP, false));
-      } else if (preP)
-        missings.push(preP);
-    }
-  }
-  news.forEach(function(newP) {
-    var preP = closer(newP, missings.filter(util.partial(samePiece, newP)));
-    if (preP) {
-      var orig = white ? preP.pos : newP.pos;
-      var dest = white ? newP.pos : preP.pos;
-      var vector = [(orig[0] - dest[0]) * width, (dest[1] - orig[1]) * height];
-      anims[newP.key] = [vector, vector];
-      animedOrigs.push(preP.key);
-    }
-  });
-  missings.forEach(function(p) {
-    if (p.key !== current.movable.dropped[0] && !util.containsX(animedOrigs, p.key)) {
-      fadings.push({
-        piece: {
-          role: p.role,
-          color: p.color
-        },
-        left: 12.5 * (white ? (p.pos[0] - 1) : (8 - p.pos[0])) + '%',
-        bottom: 12.5 * (white ? (p.pos[1] - 1) : (8 - p.pos[1])) + '%',
-        opacity: 1
-      });
-    }
-  });
-
-  return {
-    anims: anims,
-    fadings: fadings
-  };
-}
-
-function roundBy(n, by) {
-  return Math.round(n * by) / by;
-}
-
-function go(data) {
-  if (!data.animation.current.start) return; // animation was canceled
-  var rest = 1 - (new Date().getTime() - data.animation.current.start) / data.animation.current.duration;
-  if (rest <= 0) {
-    data.animation.current = {};
-    data.render();
-  } else {
-    var ease = easing.easeInOutCubic(rest);
-    for (var key in data.animation.current.anims) {
-      var cfg = data.animation.current.anims[key];
-      cfg[1] = [roundBy(cfg[0][0] * ease, 10), roundBy(cfg[0][1] * ease, 10)];
-    }
-    for (var i in data.animation.current.fadings) {
-      data.animation.current.fadings[i].opacity = roundBy(ease, 100);
-    }
-    data.render();
-    util.requestAnimationFrame(function() {
-      go(data);
-    });
-  }
-}
-
-function animate(transformation, data) {
-  // clone data
-  var prev = {
-    orientation: data.orientation,
-    pieces: {}
-  };
-  // clone pieces
-  for (var key in data.pieces) {
-    prev.pieces[key] = {
-      role: data.pieces[key].role,
-      color: data.pieces[key].color
-    };
-  }
-  var result = transformation();
-  var plan = computePlan(prev, data);
-  if (Object.keys(plan.anims).length > 0 || plan.fadings.length > 0) {
-    var alreadyRunning = data.animation.current.start;
-    data.animation.current = {
-      start: new Date().getTime(),
-      duration: data.animation.duration,
-      anims: plan.anims,
-      fadings: plan.fadings
-    };
-    if (!alreadyRunning) go(data);
-  } else {
-    // don't animate, just render right away
-    data.renderRAF();
-  }
-  return result;
-}
-
-// transformation is a function
-// accepts board data and any number of arguments,
-// and mutates the board.
-module.exports = function(transformation, data, skip) {
-  return function() {
-    var transformationArgs = [data].concat(Array.prototype.slice.call(arguments, 0));
-    if (!data.render) return transformation.apply(null, transformationArgs);
-    else if (data.animation.enabled && !skip)
-      return animate(util.partialApply(transformation, transformationArgs), data);
-    else {
-      var result = transformation.apply(null, transformationArgs);
-      data.renderRAF();
-      return result;
-    }
-  };
-};
-
-},{"./util":18}],6:[function(require,module,exports){
-var board = require('./board');
-
-module.exports = function(controller) {
-
-  return {
-    set: controller.set,
-    toggleOrientation: controller.toggleOrientation,
-    getOrientation: function () {
-      return controller.data.orientation;
-    },
-    getPieces: function() {
-      return controller.data.pieces;
-    },
-    getMaterialDiff: function() {
-      return board.getMaterialDiff(controller.data);
-    },
-    getFen: controller.getFen,
-    dump: function() {
-      return controller.data;
-    },
-    move: controller.apiMove,
-    setPieces: controller.setPieces,
-    setCheck: controller.setCheck,
-    playPremove: controller.playPremove,
-    cancelPremove: controller.cancelPremove,
-    cancelMove: controller.cancelMove,
-    stop: controller.stop,
-    explode: controller.explode,
-    setAutoShapes: controller.setAutoShapes
-  };
-};
-
-},{"./board":7}],7:[function(require,module,exports){
-var util = require('./util');
-var premove = require('./premove');
-var anim = require('./anim');
-var hold = require('./hold');
-
-function callUserFunction(f) {
-  setTimeout(f, 1);
-}
-
-function toggleOrientation(data) {
-  data.orientation = util.opposite(data.orientation);
-}
-
-function reset(data) {
-  data.lastMove = null;
-  setSelected(data, null);
-  unsetPremove(data);
-}
-
-function setPieces(data, pieces) {
-  Object.keys(pieces).forEach(function(key) {
-    if (pieces[key]) data.pieces[key] = pieces[key];
-    else delete data.pieces[key];
-  });
-  data.movable.dropped = [];
-}
-
-function setCheck(data, color) {
-  var checkColor = color || data.turnColor;
-  Object.keys(data.pieces).forEach(function(key) {
-    if (data.pieces[key].color === checkColor && data.pieces[key].role === 'king') data.check = key;
-  });
-}
-
-function setPremove(data, orig, dest) {
-  data.premovable.current = [orig, dest];
-  callUserFunction(util.partial(data.premovable.events.set, orig, dest));
-}
-
-function unsetPremove(data) {
-  if (data.premovable.current) {
-    data.premovable.current = null;
-    callUserFunction(data.premovable.events.unset);
-  }
-}
-
-function tryAutoCastle(data, orig, dest) {
-  if (!data.autoCastle) return;
-  var king = data.pieces[dest];
-  if (king.role !== 'king') return;
-  var origPos = util.key2pos(orig);
-  if (origPos[0] !== 5) return;
-  if (origPos[1] !== 1 && origPos[1] !== 8) return;
-  var destPos = util.key2pos(dest),
-    oldRookPos, newRookPos, newKingPos;
-  if (destPos[0] === 7 || destPos[0] === 8) {
-    oldRookPos = util.pos2key([8, origPos[1]]);
-    newRookPos = util.pos2key([6, origPos[1]]);
-    newKingPos = util.pos2key([7, origPos[1]]);
-  } else if (destPos[0] === 3 || destPos[0] === 1) {
-    oldRookPos = util.pos2key([1, origPos[1]]);
-    newRookPos = util.pos2key([4, origPos[1]]);
-    newKingPos = util.pos2key([3, origPos[1]]);
-  } else return;
-  delete data.pieces[orig];
-  delete data.pieces[dest];
-  delete data.pieces[oldRookPos];
-  data.pieces[newKingPos] = {
-    role: 'king',
-    color: king.color
-  };
-  data.pieces[newRookPos] = {
-    role: 'rook',
-    color: king.color
-  };
-}
-
-function baseMove(data, orig, dest) {
-  var success = anim(function() {
-    if (orig === dest || !data.pieces[orig]) return false;
-    var captured = (
-      data.pieces[dest] &&
-      data.pieces[dest].color !== data.pieces[orig].color
-    ) ? data.pieces[dest] : null;
-    callUserFunction(util.partial(data.events.move, orig, dest, captured));
-    data.pieces[dest] = data.pieces[orig];
-    delete data.pieces[orig];
-    data.lastMove = [orig, dest];
-    data.check = null;
-    tryAutoCastle(data, orig, dest);
-    callUserFunction(data.events.change);
-    return true;
-  }, data)();
-  if (success) data.movable.dropped = [];
-  return success;
-}
-
-function baseUserMove(data, orig, dest) {
-  var result = baseMove(data, orig, dest);
-  if (result) {
-    data.movable.dests = {};
-    data.turnColor = util.opposite(data.turnColor);
-  }
-  return result;
-}
-
-function apiMove(data, orig, dest) {
-  return baseMove(data, orig, dest);
-}
-
-function userMove(data, orig, dest) {
-  if (!dest) {
-    hold.cancel();
-    setSelected(data, null);
-    if (data.movable.dropOff === 'trash') {
-      delete data.pieces[orig];
-      callUserFunction(data.events.change);
-    }
-  } else if (canMove(data, orig, dest)) {
-    if (baseUserMove(data, orig, dest)) {
-      var holdTime = hold.stop();
-      setSelected(data, null);
-      callUserFunction(util.partial(data.movable.events.after, orig, dest, {
-        premove: false,
-        holdTime: holdTime
-      }));
-      return true;
-    }
-  } else if (canPremove(data, orig, dest)) {
-    setPremove(data, orig, dest);
-    setSelected(data, null);
-  } else if (isMovable(data, dest) || isPremovable(data, dest)) {
-    setSelected(data, dest);
-    hold.start();
-  } else setSelected(data, null);
-}
-
-function selectSquare(data, key) {
-  if (data.selected) {
-    if (key) {
-      if (data.selected !== key) {
-        if (userMove(data, data.selected, key)) data.stats.dragged = false;
-      } else hold.start();
-    } else {
-      setSelected(data, null);
-      hold.cancel();
-    }
-  } else if (isMovable(data, key) || isPremovable(data, key)) {
-    setSelected(data, key);
-    hold.start();
-  }
-  if (key) callUserFunction(util.partial(data.events.select, key));
-}
-
-function setSelected(data, key) {
-  data.selected = key;
-  if (key && isPremovable(data, key))
-    data.premovable.dests = premove(data.pieces, key, data.premovable.castle);
-  else
-    data.premovable.dests = null;
-}
-
-function isMovable(data, orig) {
-  var piece = data.pieces[orig];
-  return piece && (
-    data.movable.color === 'both' || (
-      data.movable.color === piece.color &&
-      data.turnColor === piece.color
-    ));
-}
-
-function canMove(data, orig, dest) {
-  return orig !== dest && isMovable(data, orig) && (
-    data.movable.free || util.containsX(data.movable.dests[orig], dest)
-  );
-}
-
-function isPremovable(data, orig) {
-  var piece = data.pieces[orig];
-  return piece && data.premovable.enabled &&
-    data.movable.color === piece.color &&
-    data.turnColor !== piece.color;
-}
-
-function canPremove(data, orig, dest) {
-  return orig !== dest &&
-    isPremovable(data, orig) &&
-    util.containsX(premove(data.pieces, orig, data.premovable.castle), dest);
-}
-
-function isDraggable(data, orig) {
-  var piece = data.pieces[orig];
-  return piece && data.draggable.enabled && (
-    data.movable.color === 'both' || (
-      data.movable.color === piece.color && (
-        data.turnColor === piece.color || data.premovable.enabled
-      )
-    )
-  );
-}
-
-function playPremove(data) {
-  var move = data.premovable.current;
-  if (!move) return;
-  var orig = move[0],
-    dest = move[1],
-    success = false;
-  if (canMove(data, orig, dest)) {
-    if (baseUserMove(data, orig, dest)) {
-      callUserFunction(util.partial(data.movable.events.after, orig, dest, {
-        premove: true
-      }));
-      success = true;
-    }
-  }
-  unsetPremove(data);
-  return success;
-}
-
-function cancelMove(data) {
-  unsetPremove(data);
-  selectSquare(data, null);
-}
-
-function stop(data) {
-  data.movable.color = null;
-  data.movable.dests = {};
-  cancelMove(data);
-}
-
-function getKeyAtDomPos(data, pos, bounds) {
-  if (!bounds && !data.bounds) return;
-  bounds = bounds || data.bounds(); // use provided value, or compute it
-  var file = Math.ceil(8 * ((pos[0] - bounds.left) / bounds.width));
-  file = data.orientation === 'white' ? file : 9 - file;
-  var rank = Math.ceil(8 - (8 * ((pos[1] - bounds.top) / bounds.height)));
-  rank = data.orientation === 'white' ? rank : 9 - rank;
-  if (file > 0 && file < 9 && rank > 0 && rank < 9) return util.pos2key([file, rank]);
-}
-
-// {white: {pawn: 3 queen: 1}, black: {bishop: 2}}
-function getMaterialDiff(data) {
-  var counts = {
-    king: 0,
-    queen: 0,
-    rook: 0,
-    bishop: 0,
-    knight: 0,
-    pawn: 0
-  };
-  for (var k in data.pieces) {
-    var p = data.pieces[k];
-    counts[p.role] += ((p.color === 'white') ? 1 : -1);
-  }
-  var diff = {
-    white: {},
-    black: {}
-  };
-  for (var role in counts) {
-    var c = counts[role];
-    if (c > 0) diff.white[role] = c;
-    else if (c < 0) diff.black[role] = -c;
-  }
-  return diff;
-}
-
-module.exports = {
-  reset: reset,
-  toggleOrientation: toggleOrientation,
-  setPieces: setPieces,
-  setCheck: setCheck,
-  selectSquare: selectSquare,
-  setSelected: setSelected,
-  isDraggable: isDraggable,
-  canMove: canMove,
-  userMove: userMove,
-  apiMove: apiMove,
-  playPremove: playPremove,
-  unsetPremove: unsetPremove,
-  cancelMove: cancelMove,
-  stop: stop,
-  getKeyAtDomPos: getKeyAtDomPos,
-  getMaterialDiff: getMaterialDiff
-};
-
-},{"./anim":5,"./hold":14,"./premove":16,"./util":18}],8:[function(require,module,exports){
-var merge = require('merge');
-var board = require('./board');
-var fen = require('./fen');
-
-module.exports = function(data, config) {
-
-  if (!config) return;
-
-  // don't merge destinations. Just override.
-  if (config.movable && config.movable.dests) delete data.movable.dests;
-
-  merge.recursive(data, config);
-
-  // if a fen was provided, replace the pieces
-  if (data.fen) {
-    data.pieces = fen.read(data.fen);
-    data.check = config.check;
-    data.drawable.shapes = [];
-    delete data.fen;
-  }
-
-  if (data.check === true) board.setCheck(data);
-
-  // forget about the last dropped piece
-  data.movable.dropped = [];
-
-  // fix move/premove dests
-  if (data.selected) board.setSelected(data, data.selected);
-
-  // no need for such short animations
-  if (!data.animation.duration || data.animation.duration < 10)
-    data.animation.enabled = false;
-};
-
-},{"./board":7,"./fen":13,"merge":3}],9:[function(require,module,exports){
-var board = require('./board');
-var data = require('./data');
-var fen = require('./fen');
-var configure = require('./configure');
-var anim = require('./anim');
-var drag = require('./drag');
-
-module.exports = function(cfg) {
-
-  this.data = data(cfg);
-
-  this.vm = {
-    exploding: false
-  };
-
-  this.getFen = function() {
-    return fen.write(this.data.pieces);
-  }.bind(this);
-
-  this.set = anim(configure, this.data);
-
-  this.toggleOrientation = anim(board.toggleOrientation, this.data);
-
-  this.setPieces = anim(board.setPieces, this.data);
-
-  this.selectSquare = anim(board.selectSquare, this.data, true);
-
-  this.apiMove = anim(board.apiMove, this.data);
-
-  this.playPremove = anim(board.playPremove, this.data);
-
-  this.cancelPremove = anim(board.unsetPremove, this.data, true);
-
-  this.setCheck = anim(board.setCheck, this.data, true);
-
-  this.cancelMove = anim(function(data) {
-    board.cancelMove(data);
-    drag.cancel(data);
-  }.bind(this), this.data, true);
-
-  this.stop = anim(function(data) {
-    board.stop(data);
-    drag.cancel(data);
-  }.bind(this), this.data, true);
-
-  this.explode = function(keys) {
-    if (!this.data.render) return;
-    this.vm.exploding = keys;
-    this.data.renderRAF();
-    setTimeout(function() {
-      this.vm.exploding = false;
-      this.data.renderRAF();
-    }.bind(this), 200);
-  }.bind(this);
-
-  this.setAutoShapes = function(shapes) {
-    anim(function(data) {
-      data.drawable.autoShapes = shapes;
-    }, this.data, false)();
-  }.bind(this);
-};
-
-},{"./anim":5,"./board":7,"./configure":8,"./data":10,"./drag":11,"./fen":13}],10:[function(require,module,exports){
-var fen = require('./fen');
-var configure = require('./configure');
-
-module.exports = function(cfg) {
-  var defaults = {
-    pieces: fen.read(fen.initial),
-    orientation: 'white', // board orientation. white | black
-    turnColor: 'white', // turn to play. white | black
-    check: null, // square currently in check "a2" | null
-    lastMove: null, // squares part of the last move ["c3", "c4"] | null
-    selected: null, // square currently selected "a1" | null
-    coordinates: true, // include coords attributes
-    render: null, // function that rerenders the board
-    renderRAF: null, // function that rerenders the board using requestAnimationFrame
-    element: null, // DOM element of the board, required for drag piece centering
-    bounds: null, // function that calculates the board bounds
-    autoCastle: false, // immediately complete the castle by moving the rook after king move
-    viewOnly: false, // don't bind events: the user will never be able to move pieces around
-    minimalDom: false, // don't use square elements. Optimization to use only with viewOnly
-    disableContextMenu: false, // because who needs a context menu on a chessboard
-    resizable: true, // listens to chessground.resize on document.body to clear bounds cache
-    highlight: {
-      lastMove: true, // add last-move class to squares
-      check: true, // add check class to squares
-      dragOver: true // add drag-over class to square when dragging over it
-    },
-    animation: {
-      enabled: true,
-      duration: 200,
-      /*{ // current
-       *  start: timestamp,
-       *  duration: ms,
-       *  anims: {
-       *    a2: [
-       *      [-30, 50], // animation goal
-       *      [-20, 37]  // animation current status
-       *    ], ...
-       *  },
-       *  fading: [
-       *    {
-       *      pos: [80, 120], // position relative to the board
-       *      opacity: 0.34,
-       *      role: 'rook',
-       *      color: 'black'
-       *    }
-       *  }
-       *}*/
-      current: {}
-    },
-    movable: {
-      free: true, // all moves are valid - board editor
-      color: 'both', // color that can move. white | black | both | null
-      dests: {}, // valid moves. {"a2" ["a3" "a4"] "b1" ["a3" "c3"]} | null
-      dropOff: 'revert', // when a piece is dropped outside the board. "revert" | "trash"
-      dropped: [], // last dropped [orig, dest], not to be animated
-      showDests: true, // whether to add the move-dest class on squares
-      events: {
-        after: function(orig, dest, metadata) {} // called after the move has been played
-      }
-    },
-    premovable: {
-      enabled: true, // allow premoves for color that can not move
-      showDests: true, // whether to add the premove-dest class on squares
-      castle: true, // whether to allow king castle premoves
-      dests: [], // premove destinations for the current selection
-      current: null, // keys of the current saved premove ["e2" "e4"] | null
-      events: {
-        set: function(orig, dest) {}, // called after the premove has been set
-        unset: function() {} // called after the premove has been unset
-      }
-    },
-    draggable: {
-      enabled: true, // allow moves & premoves to use drag'n drop
-      distance: 3, // minimum distance to initiate a drag, in pixels
-      autoDistance: true, // lets chessground set distance to zero when user drags pieces
-      squareTarget: false, // display big square target intended for mobile
-      centerPiece: true, // center the piece on cursor at drag start
-      showGhost: true, // show ghost of piece being dragged
-      /*{ // current
-       *  orig: "a2", // orig key of dragging piece
-       *  rel: [100, 170] // x, y of the piece at original position
-       *  pos: [20, -12] // relative current position
-       *  dec: [4, -8] // piece center decay
-       *  over: "b3" // square being moused over
-       *  bounds: current cached board bounds
-       *  started: whether the drag has started, as per the distance setting
-       *}*/
-      current: {}
-    },
-    stats: {
-      // was last piece dragged or clicked?
-      // needs default to false for touch
-      dragged: !('ontouchstart' in window)
-    },
-    events: {
-      change: function() {}, // called after the situation changes on the board
-      // called after a piece has been moved.
-      // capturedPiece is null or like {color: 'white', 'role': 'queen'}
-      move: function(orig, dest, capturedPiece) {},
-      capture: function(key, piece) {}, // DEPRECATED called when a piece has been captured
-      select: function(key) {} // called when a square is selected
-    },
-    drawable: {
-      enabled: false, // allows SVG drawings
-      // user shapes
-      shapes: [
-        // {brush: 'green', orig: 'e8'},
-        // {brush: 'yellow', orig: 'c4', dest: 'f7'}
-      ],
-      // computer shapes
-      autoShapes: [
-        // {brush: 'paleBlue', orig: 'e8'},
-        // {brush: 'paleRed', orig: 'c4', dest: 'f7'}
-      ],
-      /*{ // current
-       *  orig: "a2", // orig key of drawing
-       *  pos: [20, -12] // relative current position
-       *  dest: "b3" // square being moused over
-       *  bounds: // current cached board bounds
-       *  brush: 'green' // brush name for shape
-       *}*/
-      current: {},
-      brushes: {
-        green: {
-          key: 'g',
-          color: '#15781B',
-          opacity: 1,
-          lineWidth: 10,
-          circleMargin: 0
-        },
-        red: {
-          key: 'r',
-          color: '#882020',
-          opacity: 1,
-          lineWidth: 10,
-          circleMargin: 1
-        },
-        blue: {
-          key: 'b',
-          color: '#003088',
-          opacity: 1,
-          lineWidth: 10,
-          circleMargin: 2
-        },
-        yellow: {
-          key: 'y',
-          color: '#e68f00',
-          opacity: 1,
-          lineWidth: 10,
-          circleMargin: 3
-        },
-        paleBlue: {
-          key: 'pb',
-          color: '#003088',
-          opacity: 0.45,
-          lineWidth: 15,
-          circleMargin: 0
-        },
-        paleGreen: {
-          key: 'pg',
-          color: '#15781B',
-          opacity: 0.55,
-          lineWidth: 15,
-          circleMargin: 0
-        }
-      }
-    }
-  };
-
-  configure(defaults, cfg || {});
-
-  return defaults;
-};
-
-},{"./configure":8,"./fen":13}],11:[function(require,module,exports){
-var board = require('./board');
-var util = require('./util');
-
-var originTarget;
-
-function hashPiece(piece) {
-  return piece ? piece.color + piece.role : '';
-}
-
-function computeSquareBounds(data, bounds, key) {
-  var pos = util.key2pos(key);
-  if (data.orientation !== 'white') {
-    pos[0] = 9 - pos[0];
-    pos[1] = 9 - pos[1];
-  }
-  return {
-    left: bounds.left + bounds.width * (pos[0] - 1) / 8,
-    top: bounds.top + bounds.height * (8 - pos[1]) / 8,
-    width: bounds.width / 8,
-    height: bounds.height / 8
-  };
-}
-
-function start(data, e) {
-  if (e.button !== undefined && e.button !== 0) return; // only touch or left click
-  if (e.touches && e.touches.length > 1) return; // support one finger touch only
-  e.stopPropagation();
-  e.preventDefault();
-  originTarget = e.target;
-  var previouslySelected = data.selected;
-  var position = util.eventPosition(e);
-  var bounds = data.bounds();
-  var orig = board.getKeyAtDomPos(data, position, bounds);
-  var hadPremove = !!data.premovable.current;
-  board.selectSquare(data, orig);
-  var stillSelected = data.selected === orig;
-  if (data.pieces[orig] && stillSelected && board.isDraggable(data, orig)) {
-    var squareBounds = computeSquareBounds(data, bounds, orig);
-    data.draggable.current = {
-      previouslySelected: previouslySelected,
-      orig: orig,
-      piece: hashPiece(data.pieces[orig]),
-      rel: position,
-      epos: position,
-      pos: [0, 0],
-      dec: data.draggable.centerPiece ? [
-        position[0] - (squareBounds.left + squareBounds.width / 2),
-        position[1] - (squareBounds.top + squareBounds.height / 2)
-      ] : [0, 0],
-      bounds: bounds,
-      started: data.draggable.autoDistance && data.stats.dragged
-    };
-  } else if (hadPremove) board.unsetPremove(data);
-  processDrag(data);
-}
-
-function processDrag(data) {
-  util.requestAnimationFrame(function() {
-    var cur = data.draggable.current;
-    if (cur.orig) {
-      // cancel animations while dragging
-      if (data.animation.current.start && data.animation.current.anims[cur.orig])
-        data.animation.current = {};
-      // if moving piece is gone, cancel
-      if (hashPiece(data.pieces[cur.orig]) !== cur.piece) cancel(data);
-      else {
-        if (!cur.started && util.distance(cur.epos, cur.rel) >= data.draggable.distance)
-          cur.started = true;
-        if (cur.started) {
-          cur.pos = [
-            cur.epos[0] - cur.rel[0],
-            cur.epos[1] - cur.rel[1]
-          ];
-          cur.over = board.getKeyAtDomPos(data, cur.epos, cur.bounds);
-        }
-      }
-    }
-    data.render();
-    if (cur.orig) processDrag(data);
-  });
-}
-
-function move(data, e) {
-  if (e.touches && e.touches.length > 1) return; // support one finger touch only
-
-  if (data.draggable.current.orig)
-    data.draggable.current.epos = util.eventPosition(e);
-}
-
-function end(data, e) {
-  var draggable = data.draggable;
-  var orig = draggable.current ? draggable.current.orig : null;
-  if (!orig) return;
-  // comparing with the origin target is an easy way to test that the end event
-  // has the same touch origin
-  if (e && e.type === "touchend" && originTarget !== e.target) return;
-  board.unsetPremove(data);
-  var dest = draggable.current.over;
-  if (draggable.current.started) {
-    if (orig !== dest) data.movable.dropped = [orig, dest];
-    if (board.userMove(data, orig, dest)) data.stats.dragged = true;
-  }
-  if (orig === draggable.current.previouslySelected && (orig === dest || !dest))
-    board.setSelected(data, null);
-  draggable.current = {};
-}
-
-function cancel(data) {
-  if (data.draggable.current.orig) {
-    data.draggable.current = {};
-    board.selectSquare(data, null);
-  }
-}
-
-module.exports = {
-  start: start,
-  move: move,
-  end: end,
-  cancel: cancel,
-  processDrag: processDrag // must be exposed for board editors
-};
-
-},{"./board":7,"./util":18}],12:[function(require,module,exports){
-var board = require('./board');
-var util = require('./util');
-
-var brushes = ['green', 'red', 'blue', 'yellow'];
-
-function hashPiece(piece) {
-  return piece ? piece.color + ' ' + piece.role : '';
-}
-
-function start(data, e) {
-  if (e.touches && e.touches.length > 1) return; // support one finger touch only
-  e.stopPropagation();
-  e.preventDefault();
-  board.cancelMove(data);
-  var position = util.eventPosition(e);
-  var bounds = data.bounds();
-  var orig = board.getKeyAtDomPos(data, position, bounds);
-  data.drawable.current = {
-    orig: orig,
-    epos: position,
-    bounds: bounds,
-    brush: brushes[(e.shiftKey & util.isRightButton(e)) + (e.altKey ? 2 : 0)]
-  };
-  processDraw(data);
-}
-
-function processDraw(data) {
-  util.requestAnimationFrame(function() {
-    var cur = data.drawable.current;
-    if (cur.orig) {
-      var dest = board.getKeyAtDomPos(data, cur.epos, cur.bounds);
-      if (cur.orig === dest) cur.dest = undefined;
-      else cur.dest = dest;
-    }
-    data.render();
-    if (cur.orig) processDraw(data);
-  });
-}
-
-function move(data, e) {
-  if (data.drawable.current.orig)
-    data.drawable.current.epos = util.eventPosition(e);
-}
-
-function end(data, e) {
-  var drawable = data.drawable;
-  var orig = drawable.current.orig;
-  var dest = drawable.current.dest;
-  if (orig && dest) addLine(drawable, orig, dest);
-  else if (orig) addCircle(drawable, orig);
-  drawable.current = {};
-  data.render();
-}
-
-function cancel(data) {
-  if (data.drawable.current.orig) data.drawable.current = {};
-}
-
-function clear(data, e) {
-  if (e.button !== 0 || e.shiftKey) return; // only left click
-  if (data.drawable.shapes.length) {
-    data.drawable.shapes = [];
-    data.render();
-  }
-}
-
-function not(f) {
-  return function(x) {
-    return !f(x);
-  };
-}
-
-function addCircle(drawable, key) {
-  var brush = drawable.current.brush;
-  var sameCircle = function(s) {
-    return s.brush === brush && s.orig === key && !s.dest;
-  };
-  var exists = drawable.shapes.filter(sameCircle).length > 0;
-  if (exists) drawable.shapes = drawable.shapes.filter(not(sameCircle));
-  else drawable.shapes.push({
-    brush: brush,
-    orig: key
-  });
-}
-
-function addLine(drawable, orig, dest) {
-  var brush = drawable.current.brush;
-  var sameLine = function(s) {
-    return s.orig && s.dest && (
-      (s.orig === orig && s.dest === dest) ||
-      (s.dest === orig && s.orig === dest)
-    );
-  };
-  var exists = drawable.shapes.filter(sameLine).length > 0;
-  if (exists) drawable.shapes = drawable.shapes.filter(not(sameLine));
-  else drawable.shapes.push({
-    brush: brush,
-    orig: orig,
-    dest: dest
-  });
-}
-
-module.exports = {
-  start: start,
-  move: move,
-  end: end,
-  cancel: cancel,
-  clear: clear,
-  processDraw: processDraw
-};
-
-},{"./board":7,"./util":18}],13:[function(require,module,exports){
-var util = require('./util');
-
-var initial = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
-
-var roles = {
-  p: "pawn",
-  r: "rook",
-  n: "knight",
-  b: "bishop",
-  q: "queen",
-  k: "king"
-};
-
-var letters = {
-  pawn: "p",
-  rook: "r",
-  knight: "n",
-  bishop: "b",
-  queen: "q",
-  king: "k"
-};
-
-function read(fen) {
-  if (fen === 'start') fen = initial;
-  var pieces = {};
-  fen.replace(/ .+$/, '').split('/').forEach(function(row, y) {
-    var x = 0;
-    row.split('').forEach(function(v) {
-      var nb = parseInt(v);
-      if (nb) x += nb;
-      else {
-        x++;
-        pieces[util.pos2key([x, 8 - y])] = {
-          role: roles[v.toLowerCase()],
-          color: v === v.toLowerCase() ? 'black' : 'white'
-        };
-      }
-    });
-  });
-
-  return pieces;
-}
-
-function write(pieces) {
-  return [8, 7, 6, 5, 4, 3, 2].reduce(
-    function(str, nb) {
-      return str.replace(new RegExp(Array(nb + 1).join('1'), 'g'), nb);
-    },
-    util.invRanks.map(function(y) {
-      return util.ranks.map(function(x) {
-        var piece = pieces[util.pos2key([x, y])];
-        if (piece) {
-          var letter = letters[piece.role];
-          return piece.color === 'white' ? letter.toUpperCase() : letter;
-        } else return '1';
-      }).join('');
-    }).join('/'));
-}
-
-module.exports = {
-  initial: initial,
-  read: read,
-  write: write
-};
-
-},{"./util":18}],14:[function(require,module,exports){
-var startAt;
-
-var start = function() {
-  startAt = new Date();
-};
-
-var cancel = function() {
-  startAt = null;
-};
-
-var stop = function() {
-  if (!startAt) return 0;
-  var time = new Date() - startAt;
-  startAt = null;
-  return time;
-};
-
-module.exports = {
-  start: start,
-  cancel: cancel,
-  stop: stop
-};
-
-},{}],15:[function(require,module,exports){
-var m = require('mithril');
-var ctrl = require('./ctrl');
-var view = require('./view');
-var api = require('./api');
-
-// for usage outside of mithril
-function init(element, config) {
-
-  var controller = new ctrl(config);
-
-  m.render(element, view(controller));
-
-  return api(controller);
-}
-
-module.exports = init;
-module.exports.controller = ctrl;
-module.exports.view = view;
-module.exports.fen = require('./fen');
-module.exports.util = require('./util');
-module.exports.configure = require('./configure');
-module.exports.anim = require('./anim');
-module.exports.board = require('./board');
-module.exports.drag = require('./drag');
-
-},{"./anim":5,"./api":6,"./board":7,"./configure":8,"./ctrl":9,"./drag":11,"./fen":13,"./util":18,"./view":19,"mithril":4}],16:[function(require,module,exports){
-var util = require('./util');
-
-function diff(a, b) {
-  return Math.abs(a - b);
-}
-
-function pawn(color, x1, y1, x2, y2) {
-  return diff(x1, x2) < 2 && (
-    color === 'white' ? (
-      // allow 2 squares from 1 and 8, for horde
-      y2 === y1 + 1 || (y1 <= 2 && y2 === (y1 + 2) && x1 === x2)
-    ) : (
-      y2 === y1 - 1 || (y1 >= 7 && y2 === (y1 - 2) && x1 === x2)
-    )
-  );
-}
-
-function knight(x1, y1, x2, y2) {
-  var xd = diff(x1, x2);
-  var yd = diff(y1, y2);
-  return (xd === 1 && yd === 2) || (xd === 2 && yd === 1);
-}
-
-function bishop(x1, y1, x2, y2) {
-  return diff(x1, x2) === diff(y1, y2);
-}
-
-function rook(x1, y1, x2, y2) {
-  return x1 === x2 || y1 === y2;
-}
-
-function queen(x1, y1, x2, y2) {
-  return bishop(x1, y1, x2, y2) || rook(x1, y1, x2, y2);
-}
-
-function king(color, rookFiles, canCastle, x1, y1, x2, y2) {
-  return (
-    diff(x1, x2) < 2 && diff(y1, y2) < 2
-  ) || (
-    canCastle && y1 === y2 && y1 === (color === 'white' ? 1 : 8) && (
-      (x1 === 5 && (x2 === 3 || x2 === 7)) || util.containsX(rookFiles, x2)
-    )
-  );
-}
-
-function rookFilesOf(pieces, color) {
-  return Object.keys(pieces).filter(function(key) {
-    var piece = pieces[key];
-    return piece && piece.color === color && piece.role === 'rook';
-  }).map(function(key) {
-    return util.key2pos(key)[0];
-  });
-}
-
-function compute(pieces, key, canCastle) {
-  var piece = pieces[key];
-  var pos = util.key2pos(key);
-  var mobility;
-  switch (piece.role) {
-    case 'pawn':
-      mobility = pawn.bind(null, piece.color);
-      break;
-    case 'knight':
-      mobility = knight;
-      break;
-    case 'bishop':
-      mobility = bishop;
-      break;
-    case 'rook':
-      mobility = rook;
-      break;
-    case 'queen':
-      mobility = queen;
-      break;
-    case 'king':
-      mobility = king.bind(null, piece.color, rookFilesOf(pieces, piece.color), canCastle);
-      break;
-  }
-  return util.allPos.filter(function(pos2) {
-    return (pos[0] !== pos2[0] || pos[1] !== pos2[1]) && mobility(pos[0], pos[1], pos2[0], pos2[1]);
-  }).map(util.pos2key);
-}
-
-module.exports = compute;
-
-},{"./util":18}],17:[function(require,module,exports){
-var m = require('mithril');
-var key2pos = require('./util').key2pos;
-
-function circleWidth(current, bounds) {
-  return (current ? 2 : 4) / 512 * bounds.width;
-}
-
-function lineWidth(brush, current, bounds) {
-  return (brush.lineWidth || 10) * (current ? 0.7 : 1) / 512 * bounds.width;
-}
-
-function opacity(brush, current) {
-  return (brush.opacity || 1) * (current ? 0.6 : 1);
-}
-
-function arrowMargin(current, bounds) {
-  return (current ? 12 : 24) / 512 * bounds.width;
-}
-
-function pos2px(pos, bounds) {
-  var squareSize = bounds.width / 8;
-  return [(pos[0] - 0.5) * squareSize, (8.5 - pos[1]) * squareSize];
-}
-
-function circle(brush, pos, current, bounds) {
-  var o = pos2px(pos, bounds);
-  var width = circleWidth(current, bounds);
-  var radius = bounds.width / 16;
-  return {
-    tag: 'circle',
-    attrs: {
-      key: current ? 'current' : pos + brush.key,
-      stroke: brush.color,
-      'stroke-width': width,
-      fill: 'none',
-      opacity: opacity(brush, current),
-      cx: o[0],
-      cy: o[1],
-      r: radius - width / 2 - brush.circleMargin * width * 1.5
-    }
-  };
-}
-
-function arrow(brush, orig, dest, current, bounds) {
-  var m = arrowMargin(current, bounds);
-  var a = pos2px(orig, bounds);
-  var b = pos2px(dest, bounds);
-  var dx = b[0] - a[0],
-    dy = b[1] - a[1],
-    angle = Math.atan2(dy, dx);
-  var xo = Math.cos(angle) * m,
-    yo = Math.sin(angle) * m;
-  return {
-    tag: 'line',
-    attrs: {
-      key: current ? 'current' : orig + dest + brush.key,
-      stroke: brush.color,
-      'stroke-width': lineWidth(brush, current, bounds),
-      'stroke-linecap': 'round',
-      'marker-end': 'url(#arrowhead-' + brush.key + ')',
-      opacity: opacity(brush, current),
-      x1: a[0],
-      y1: a[1],
-      x2: b[0] - xo,
-      y2: b[1] - yo
-    }
-  };
-}
-
-function defs(brushes) {
-  return {
-    tag: 'defs',
-    children: [
-      brushes.map(function(brush) {
-        return {
-          key: brush.key,
-          tag: 'marker',
-          attrs: {
-            id: 'arrowhead-' + brush.key,
-            orient: 'auto',
-            markerWidth: 4,
-            markerHeight: 8,
-            refX: 2.05,
-            refY: 2.01
-          },
-          children: [{
-            tag: 'path',
-            attrs: {
-              d: 'M0,0 V4 L3,2 Z',
-              fill: brush.color
-            }
-          }]
-        }
-      })
-    ]
-  };
-}
-
-function orient(pos, color) {
-  return color === 'white' ? pos : [9 - pos[0], 9 - pos[1]];
-}
-
-function renderShape(orientation, current, brushes, bounds) {
-  return function(shape) {
-    if (shape.orig && shape.dest) return arrow(
-      brushes[shape.brush],
-      orient(key2pos(shape.orig), orientation),
-      orient(key2pos(shape.dest), orientation),
-      current, bounds);
-    else if (shape.orig) return circle(
-      brushes[shape.brush],
-      orient(key2pos(shape.orig), orientation),
-      current, bounds);
-  };
-}
-
-module.exports = function(ctrl) {
-  if (!ctrl.data.bounds) return;
-  var bounds = ctrl.data.bounds();
-  if (bounds.width !== bounds.height) return;
-  var d = ctrl.data.drawable;
-  var allShapes = d.shapes.concat(d.autoShapes);
-  if (!allShapes.length && !d.current.orig) return;
-  var usedBrushes = Object.keys(ctrl.data.drawable.brushes).filter(function(name) {
-    return (d.current && d.current.dest && d.current.brush === name) || allShapes.filter(function(s) {
-      return s.dest && s.brush === name;
-    }).length;
-  }).map(function(name) {
-    return ctrl.data.drawable.brushes[name];
-  });
-  return {
-    tag: 'svg',
-    children: [
-      defs(usedBrushes),
-      allShapes.map(renderShape(ctrl.data.orientation, false, ctrl.data.drawable.brushes, bounds)),
-      renderShape(ctrl.data.orientation, true, ctrl.data.drawable.brushes, bounds)(d.current)
-    ]
-  };
-}
-
-},{"./util":18,"mithril":4}],18:[function(require,module,exports){
-var files = "abcdefgh".split('');
-var ranks = [1, 2, 3, 4, 5, 6, 7, 8];
-var invRanks = [8, 7, 6, 5, 4, 3, 2, 1];
-
-function pos2key(pos) {
-  return files[pos[0] - 1] + pos[1];
-}
-
-function key2pos(pos) {
-  return [(files.indexOf(pos[0]) + 1), parseInt(pos[1])];
-}
-
-function invertKey(key) {
-  return files[7 - files.indexOf(key[0])] + (9 - parseInt(key[1]));
-}
-
-var allPos = (function() {
-  var ps = [];
-  invRanks.forEach(function(y) {
-    ranks.forEach(function(x) {
-      ps.push([x, y]);
-    });
-  });
-  return ps;
-})();
-var invPos = allPos.slice().reverse();
-var allKeys = allPos.map(pos2key);
-
-function classSet(classes) {
-  var arr = [];
-  for (var i in classes) {
-    if (classes[i]) arr.push(i);
-  }
-  return arr.join(' ');
-}
-
-function opposite(color) {
-  return color === 'white' ? 'black' : 'white';
-}
-
-function contains2(xs, x) {
-  return xs && (xs[0] === x || xs[1] === x);
-}
-
-function containsX(xs, x) {
-  return xs && xs.indexOf(x) !== -1;
-}
-
-function distance(pos1, pos2) {
-  return Math.sqrt(Math.pow(pos1[0] - pos2[0], 2) + Math.pow(pos1[1] - pos2[1], 2));
-}
-
-// this must be cached because of the access to document.body.style
-var cachedTransformProp;
-
-function computeTransformProp() {
-  return 'transform' in document.body.style ?
-    'transform' : 'webkitTransform' in document.body.style ?
-    'webkitTransform' : 'mozTransform' in document.body.style ?
-    'mozTransform' : 'oTransform' in document.body.style ?
-    'oTransform' : 'msTransform';
-}
-
-function transformProp() {
-  if (!cachedTransformProp) cachedTransformProp = computeTransformProp();
-  return cachedTransformProp;
-}
-
-function translate(pos) {
-  return 'translate(' + pos[0] + 'px,' + pos[1] + 'px)';
-}
-
-function eventPosition(e) {
-  return e.touches ? [e.targetTouches[0].clientX, e.targetTouches[0].clientY] : [e.clientX, e.clientY];
-}
-
-function partialApply(fn, args) {
-  return fn.bind.apply(fn, [null].concat(args));
-}
-
-function partial() {
-  return partialApply(arguments[0], Array.prototype.slice.call(arguments, 1));
-}
-
-function isRightButton(e) {
-  return e.buttons === 2 || e.button === 2;
-}
-
-function memo(f) {
-  var v, ret = function() {
-    if (v === undefined) v = f();
-    return v;
-  };
-  ret.clear = function() {
-    v = undefined;
-  }
-  return ret;
-}
-
-module.exports = {
-  files: files,
-  ranks: ranks,
-  invRanks: invRanks,
-  allPos: allPos,
-  invPos: invPos,
-  allKeys: allKeys,
-  pos2key: pos2key,
-  key2pos: key2pos,
-  invertKey: invertKey,
-  classSet: classSet,
-  opposite: opposite,
-  translate: translate,
-  contains2: contains2,
-  containsX: containsX,
-  distance: distance,
-  eventPosition: eventPosition,
-  partialApply: partialApply,
-  partial: partial,
-  transformProp: transformProp,
-  requestAnimationFrame: (window.requestAnimationFrame || window.setTimeout).bind(window),
-  isRightButton: isRightButton,
-  memo: memo
-};
-
-},{}],19:[function(require,module,exports){
-var drag = require('./drag');
-var draw = require('./draw');
-var util = require('./util');
-var svg = require('./svg');
-var m = require('mithril');
-
-function pieceClass(p) {
-  return p.role + ' ' + p.color;
-}
-
-function renderPiece(ctrl, key, p) {
-  var attrs = {
-    style: {},
-    class: pieceClass(p)
-  };
-  var draggable = ctrl.data.draggable.current;
-  if (draggable.orig === key && draggable.started) {
-    attrs.style[util.transformProp()] = util.translate([
-      draggable.pos[0] + draggable.dec[0],
-      draggable.pos[1] + draggable.dec[1]
-    ]);
-    attrs.class += ' dragging';
-  } else if (ctrl.data.animation.current.anims) {
-    var animation = ctrl.data.animation.current.anims[key];
-    if (animation) attrs.style[util.transformProp()] = util.translate(animation[1]);
-  }
-  return {
-    tag: 'piece',
-    attrs: attrs
-  };
-}
-
-function renderGhost(p) {
-  return {
-    tag: 'piece',
-    attrs: {
-      class: pieceClass(p) + ' ghost'
-    }
-  };
-}
-
-function renderSquare(ctrl, pos, asWhite) {
-  var file = util.files[pos[0] - 1];
-  var rank = pos[1];
-  var key = file + rank;
-  var piece = ctrl.data.pieces[key];
-  var isDragOver = ctrl.data.highlight.dragOver && ctrl.data.draggable.current.over === key;
-  var classes = util.classSet({
-    'selected': ctrl.data.selected === key,
-    'check': ctrl.data.highlight.check && ctrl.data.check === key,
-    'last-move': ctrl.data.highlight.lastMove && util.contains2(ctrl.data.lastMove, key),
-    'move-dest': (isDragOver || ctrl.data.movable.showDests) && util.containsX(ctrl.data.movable.dests[ctrl.data.selected], key),
-    'premove-dest': (isDragOver || ctrl.data.premovable.showDests) && util.containsX(ctrl.data.premovable.dests, key),
-    'current-premove': util.contains2(ctrl.data.premovable.current, key),
-    'drag-over': isDragOver,
-    'oc': !!piece,
-    'exploding': ctrl.vm.exploding && ctrl.vm.exploding.indexOf(key) !== -1
-  });
-  var attrs = {
-    style: {
-      left: (asWhite ? pos[0] - 1 : 8 - pos[0]) * 12.5 + '%',
-      bottom: (asWhite ? pos[1] - 1 : 8 - pos[1]) * 12.5 + '%'
-    }
-  };
-  if (classes) attrs.class = classes;
-  if (ctrl.data.coordinates) {
-    if (pos[1] === (asWhite ? 1 : 8)) attrs['data-coord-x'] = file;
-    if (pos[0] === (asWhite ? 8 : 1)) attrs['data-coord-y'] = rank;
-  }
-  var children = [];
-  if (piece) {
-    children.push(renderPiece(ctrl, key, piece));
-    if (ctrl.data.draggable.current.orig === key && ctrl.data.draggable.showGhost) {
-      children.push(renderGhost(piece));
-    }
-  }
-  return {
-    tag: 'square',
-    attrs: attrs,
-    children: children
-  };
-}
-
-function renderSquareTarget(ctrl, cur) {
-  var pos = util.key2pos(cur.over),
-    x = ctrl.data.orientation === 'white' ? pos[0] : 9 - pos[0],
-    y = ctrl.data.orientation === 'white' ? pos[1] : 9 - pos[1];
-  return {
-    tag: 'div',
-    attrs: {
-      id: 'cg-square-target',
-      style: {
-        width: cur.bounds.width / 4 + 'px',
-        height: cur.bounds.height / 4 + 'px',
-        left: (x - 1.5) * cur.bounds.width / 8 + 'px',
-        top: (7.5 - y) * cur.bounds.height / 8 + 'px'
-      }
-    }
-  };
-}
-
-function renderFading(cfg) {
-  return {
-    tag: 'square',
-    attrs: {
-      class: 'fading',
-      style: {
-        left: cfg.left,
-        bottom: cfg.bottom,
-        opacity: cfg.opacity
-      }
-    },
-    children: [{
-      tag: 'piece',
-      attrs: {
-        class: pieceClass(cfg.piece)
-      }
-    }]
-  };
-}
-
-function renderMinimalDom(ctrl, asWhite) {
-  var children = [];
-  if (ctrl.data.lastMove) ctrl.data.lastMove.forEach(function(key) {
-    var pos = util.key2pos(key);
-    children.push({
-      tag: 'square',
-      attrs: {
-        class: 'last-move',
-        style: {
-          left: (asWhite ? pos[0] - 1 : 8 - pos[0]) * 12.5 + '%',
-          bottom: (asWhite ? pos[1] - 1 : 8 - pos[1]) * 12.5 + '%'
-        }
-      }
-    });
-  });
-  var piecesKeys = Object.keys(ctrl.data.pieces);
-  for (var i = 0, len = piecesKeys.length; i < len; i++) {
-    var key = piecesKeys[i];
-    var pos = util.key2pos(key);
-    var attrs = {
-      style: {
-        left: (asWhite ? pos[0] - 1 : 8 - pos[0]) * 12.5 + '%',
-        bottom: (asWhite ? pos[1] - 1 : 8 - pos[1]) * 12.5 + '%'
-      },
-      class: pieceClass(ctrl.data.pieces[key])
-    };
-    if (ctrl.data.animation.current.anims) {
-      var animation = ctrl.data.animation.current.anims[key];
-      if (animation) attrs.style[util.transformProp()] = util.translate(animation[1]);
-    }
-    children.push({
-      tag: 'piece',
-      attrs: attrs
-    });
-  }
-
-  return children;
-}
-
-function renderContent(ctrl) {
-  var asWhite = ctrl.data.orientation === 'white';
-  if (ctrl.data.minimalDom) return renderMinimalDom(ctrl, asWhite);
-  var positions = asWhite ? util.allPos : util.invPos;
-  var children = [];
-  for (var i = 0, len = positions.length; i < len; i++) {
-    children.push(renderSquare(ctrl, positions[i], asWhite));
-  }
-  if (ctrl.data.draggable.current.over && ctrl.data.draggable.squareTarget)
-    children.push(renderSquareTarget(ctrl, ctrl.data.draggable.current));
-  if (ctrl.data.animation.current.fadings)
-    ctrl.data.animation.current.fadings.forEach(function(p) {
-      children.push(renderFading(p));
-    });
-  if (ctrl.data.drawable.enabled) children.push(svg(ctrl));
-  return children;
-}
-
-function dragOrDraw(d, withDrag, withDraw) {
-  return function(e) {
-    if (util.isRightButton(e) && d.draggable.current.orig) {
-      d.draggable.current = {}
-      d.selected = null;
-    }
-    else if (d.drawable.enabled && (e.shiftKey || util.isRightButton(e))) withDraw(d, e);
-    else if (!d.viewOnly) withDrag(d, e);
-  };
-}
-
-function bindEvents(ctrl, el, context) {
-  var d = ctrl.data;
-  var onstart = dragOrDraw(d, drag.start, draw.start);
-  var onmove = dragOrDraw(d, drag.move, draw.move);
-  var onend = dragOrDraw(d, drag.end, draw.end);
-  var drawClear = util.partial(draw.clear, d);
-  var startEvents = ['touchstart', 'mousedown'];
-  var moveEvents = ['touchmove', 'mousemove'];
-  var endEvents = ['touchend', 'mouseup'];
-  startEvents.forEach(function(ev) {
-    el.addEventListener(ev, onstart);
-  });
-  moveEvents.forEach(function(ev) {
-    document.addEventListener(ev, onmove);
-  });
-  endEvents.forEach(function(ev) {
-    document.addEventListener(ev, onend);
-  });
-  el.addEventListener('mousedown', drawClear);
-  context.onunload = function() {
-    startEvents.forEach(function(ev) {
-      el.removeEventListener(ev, onstart);
-    });
-    moveEvents.forEach(function(ev) {
-      document.removeEventListener(ev, onmove);
-    });
-    endEvents.forEach(function(ev) {
-      document.removeEventListener(ev, onend);
-    });
-    el.removeEventListener('mousedown', drawClear);
-  };
-}
-
-function renderBoard(ctrl) {
-  return {
-    tag: 'div',
-    attrs: {
-      class: 'cg-board orientation-' + ctrl.data.orientation,
-      config: function(el, isUpdate, context) {
-        if (isUpdate) return;
-        if (!ctrl.data.viewOnly || ctrl.data.drawable.enabled)
-          bindEvents(ctrl, el, context);
-        // this function only repaints the board itself.
-        // it's called when dragging or animating pieces,
-        // to prevent the full application embedding chessground
-        // rendering on every animation frame
-        ctrl.data.render = function() {
-          m.render(el, renderContent(ctrl));
-        };
-        ctrl.data.renderRAF = function() {
-          util.requestAnimationFrame(ctrl.data.render);
-        };
-        ctrl.data.bounds = util.memo(el.getBoundingClientRect.bind(el));
-        ctrl.data.element = el;
-        ctrl.data.render();
-      }
-    },
-    children: []
-  };
-}
-
-module.exports = function(ctrl) {
-  return {
-    tag: 'div',
-    attrs: {
-      config: function(el, isUpdate) {
-        if (isUpdate) return;
-        el.addEventListener('contextmenu', function(e) {
-          if (ctrl.data.disableContextMenu || ctrl.data.drawable.enabled) {
-            e.preventDefault();
-            return false;
-          }
-        });
-        if (ctrl.data.resizable)
-          document.body.addEventListener('chessground.resize', function(e) {
-            ctrl.data.bounds.clear();
-            ctrl.data.render();
-          }, false);
-        ['onscroll', 'onresize'].forEach(function(n) {
-          var prev = window[n];
-          window[n] = function() {
-            prev && prev();
-            ctrl.data.bounds.clear();
-          };
-        });
-      },
-      class: [
-        'cg-board-wrap',
-        ctrl.data.viewOnly ? 'view-only' : 'manipulable',
-        ctrl.data.minimalDom ? 'minimal-dom' : 'full-dom'
-      ].join(' ')
-    },
-    children: [renderBoard(ctrl)]
-  };
-};
-
-},{"./drag":11,"./draw":12,"./svg":17,"./util":18,"mithril":4}]},{},[2])
+},{}]},{},[2])

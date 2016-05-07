@@ -153,53 +153,53 @@ top: 8, bottom: 31
 .merida piece.king.black {
   background-image: url('images/pieces/merida/bK.svg');
 }
-.staunton div.pawn.white {
+.staunton piece.pawn.white {
   background-image: url(images/pieces/staunton/basic/White-Pawn.png);
 }
-.staunton div.bishop.white {
+.staunton piece.bishop.white {
   background-image: url(images/pieces/staunton/basic/White-Bishop.png);
 }
-.staunton .cg-board.orientation-black div.bishop.white {
+.staunton .cg-board.orientation-black piece.bishop.white {
   background-image: url(images/pieces/staunton/basic/White-Bishop-Flipped.png);
 }
-.staunton div.knight.white,
-#top div.piece_demo.staunton {
+.staunton piece.knight.white,
+#top piece.piece_demo.staunton {
   background-image: url(images/pieces/staunton/basic/White-Knight.png);
 }
-.staunton .cg-board.orientation-black div.knight.white {
+.staunton .cg-board.orientation-black piece.knight.white {
   background-image: url(images/pieces/staunton/basic/White-Knight-Flipped.png);
 }
-.staunton div.rook.white {
+.staunton piece.rook.white {
   background-image: url(images/pieces/staunton/basic/White-Rook.png);
 }
-.staunton div.queen.white {
+.staunton piece.queen.white {
   background-image: url(images/pieces/staunton/basic/White-Queen.png);
 }
-.staunton div.king.white {
+.staunton piece.king.white {
   background-image: url(images/pieces/staunton/basic/White-King.png);
 }
-.staunton div.pawn.black {
+.staunton piece.pawn.black {
   background-image: url(images/pieces/staunton/basic/Black-Pawn.png);
 }
-.staunton div.bishop.black {
+.staunton piece.bishop.black {
   background-image: url(images/pieces/staunton/basic/Black-Bishop.png);
 }
-.staunton .cg-board.orientation-white div.bishop.black {
+.staunton .cg-board.orientation-white piece.bishop.black {
   background-image: url(images/pieces/staunton/basic/Black-Bishop-Flipped.png);
 }
-.staunton div.knight.black {
+.staunton piece.knight.black {
   background-image: url(images/pieces/staunton/basic/Black-Knight.png);
 }
-.staunton .cg-board.orientation-white div.knight.black {
+.staunton .cg-board.orientation-white piece.knight.black {
   background-image: url(images/pieces/staunton/basic/Black-Knight-Flipped.png);
 }
-.staunton div.rook.black {
+.staunton piece.rook.black {
   background-image: url(images/pieces/staunton/basic/Black-Rook.png);
 }
-.staunton div.queen.black {
+.staunton piece.queen.black {
   background-image: url(images/pieces/staunton/basic/Black-Queen.png);
 }
-.staunton div.king.black {
+.staunton piece.king.black {
   background-image: url(images/pieces/staunton/basic/Black-King.png);
 }
 .staunton piece {

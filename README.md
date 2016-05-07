@@ -11,6 +11,8 @@ Example3: chessground Math.random vs Math.random example. <a href="https://oddsk
 
 Example4: chessground garbochess vs garbochess example. <a href="https://oddskill.github.io/chessground-examples/example4/index.html" target="_blank">Demo Example4</a>
 
+Example5: Same as Example 4 but using 3d pieces. <a href="https://oddskill.github.io/chessground-examples/example5/index.html" target="_blank">Demo Example5</a>
+
 ## Installation
 
 npm install
@@ -26,7 +28,6 @@ Credits go to
 chessground https://github.com/ornicar/chessground
 chess.js https://github.com/jhlywa/chess.js
 garbochess https://github.com/glinscott/Garbochess-JS
-http://chessboardjs.com/
 
 ## License
 
